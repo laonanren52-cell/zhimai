@@ -2,6 +2,14 @@
 
 前端不要配置模型 API Key。DeepSeek、OpenAI、搜索和 OCR 相关密钥只放在后端环境变量中。
 
+后端现在同时承担服务端共享数据存储职责。默认数据库文件：
+
+```text
+server/data/zhimai-db.json
+```
+
+该文件会在首次启动时自动创建，并初始化默认管理员、管理员共享星图和对应 workspace 数据。生产环境可以通过 `ZHIMAI_DB_PATH` 指定持久化路径。
+
 ## 启动
 
 先进入项目根目录，再启动后端：
@@ -79,7 +87,25 @@ SERPAPI_KEY=
 ## 接口
 
 - `GET /api/health`
+- `POST /api/auth/login`
+- `POST /api/auth/register`
+- `POST /api/auth/logout`
+- `GET /api/auth/me`
+- `GET /api/admin/overview`
+- `GET /api/workspaces`
+- `GET /api/workspaces/:id/data`
+- `POST /api/workspaces/:id/data`
+- `POST /api/activity`
+- `POST /api/migrate-local-data`
 - `POST /api/ai/analyze`
 - `POST /api/ai/ask`
 - `POST /api/ai/generate-output`
 - `POST /api/search`
+
+## 数据共享规则
+
+- 管理员共享星图固定使用 `admin_public_default`。
+- 管理员可以写入共享星图；普通用户只能读取和向 Copilot 提问。
+- 普通用户注册后会自动创建 `user_private_<userId>` 个人星图。
+- 用户登录、注册、进入共享星图、上传、提问、保存成果等行为会写入服务端日志，管理员后台读取真实统计。
+- 密码以 salted sha256 哈希存储在服务端数据库中，不返回给前端。

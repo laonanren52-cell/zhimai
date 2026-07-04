@@ -1,7 +1,8 @@
-import { createContext, useContext, useEffect, useMemo, useReducer, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from "react";
 import { mockDocuments } from "../data/mockDocuments";
 import { mockGraphData } from "../data/mockGraphData";
 import { canEditWorkspace } from "../services/authService";
+import { getWorkspaceDataset, migrateLocalData, recordRemoteActivity, saveWorkspaceDataset, type WorkspaceDataset } from "../services/backendDataService";
 import { useAuthStore } from "./authStore";
 import type { GeneratedOutput } from "../types/ai";
 import type { KnowledgeDocument, ParsedDocument, ParseDiagnostics, TextChunk } from "../types/document";
@@ -61,6 +62,7 @@ export interface KnowledgeState {
 }
 
 type KnowledgeAction =
+  | { type: "hydrateWorkspace"; workspaceId: string; data: WorkspaceDataset }
   | { type: "ingestAnalysis"; workspaceId: string; file: File; content: string; analysis: AnalysisResult; parsed?: ParsedDocument }
   | { type: "deleteNode"; workspaceId: string; nodeId: string }
   | { type: "deleteDocument"; workspaceId: string; documentId: string }
@@ -465,6 +467,33 @@ function withRecommendations(state: KnowledgeState): KnowledgeState {
 }
 
 function knowledgeReducer(state: KnowledgeState, action: KnowledgeAction): KnowledgeState {
+  if (action.type === "hydrateWorkspace") {
+    const workspaceId = workspaceIdOrDefault(action.workspaceId);
+    const incomingGraph = withGraphWorkspace(action.data.graph ?? { nodes: [], edges: [] }, workspaceId);
+    const nodesById = new Map(state.graph.nodes.map((node) => [node.id, node]));
+    const keptNodes = state.graph.nodes.filter((node) => nodeWorkspaceId(node) !== workspaceId);
+    const keptEdges = state.graph.edges.filter((edge) => edgeWorkspaceId(edge, nodesById) !== workspaceId);
+    const base: KnowledgeState = {
+      ...state,
+      documents: [
+        ...state.documents.filter((document) => documentWorkspaceId(document) !== workspaceId),
+        ...(action.data.documents ?? []).map((document) => normalizeDocument(withDocumentWorkspace(document, workspaceId))),
+      ],
+      graph: compactGraph({ nodes: [...keptNodes, ...incomingGraph.nodes], edges: [...keptEdges, ...incomingGraph.edges] }),
+      outputs: [
+        ...state.outputs.filter((output) => outputWorkspaceId(output) !== workspaceId),
+        ...(action.data.outputs ?? []).map((output) => ({ ...output, workspaceId: output.workspaceId ?? workspaceId })),
+      ],
+      recentActivities: [
+        ...state.recentActivities.filter((activity) => activityWorkspaceId(activity) !== workspaceId),
+        ...(action.data.recentActivities ?? []).map((activity) => ({ ...activity, workspaceId: activity.workspaceId ?? workspaceId })),
+      ],
+      highlightedNodeIds: [],
+      revision: Math.max(state.revision, action.data.revision ?? 0) + 1,
+    };
+    return { ...base, recommendations: recommendationsFor(base) };
+  }
+
   if (action.type === "ingestAnalysis") {
     const workspaceId = workspaceIdOrDefault(action.workspaceId);
     const document = makeDocumentFromAnalysis(action.file, action.content, action.analysis, workspaceId, action.parsed);
@@ -656,10 +685,64 @@ export function KnowledgeProvider({ children }: { children: ReactNode }) {
   const workspaceId = workspaceIdOrDefault(currentWorkspace?.id);
   const canEditCurrentWorkspace = canEditWorkspace(currentUser, currentWorkspace);
   const scopedState = useMemo(() => selectWorkspaceState(state, currentWorkspace, currentAccess), [currentAccess, currentWorkspace, state]);
+  const loadedWorkspaceRef = useRef<string | null>(null);
+  const saveTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  }, [state]);
+    if (!currentWorkspace) return;
+    let cancelled = false;
+    const localSnapshot = selectWorkspaceState(state, currentWorkspace, currentAccess);
+    loadedWorkspaceRef.current = null;
+    getWorkspaceDataset(workspaceId)
+      .then(async (data) => {
+        if (cancelled) return;
+        const backendEmpty = (data.documents?.length ?? 0) === 0 && (data.graph?.nodes?.length ?? 0) === 0;
+        const hasLocalDemoData = localSnapshot.documents.length > 0 || localSnapshot.graph.nodes.length > 0;
+        if (
+          backendEmpty &&
+          hasLocalDemoData &&
+          canEditWorkspace(currentUser, currentWorkspace) &&
+          currentWorkspace.type === "admin_public" &&
+          typeof window !== "undefined" &&
+          window.confirm("检测到本地 Demo 数据，是否迁移到管理员共享星图？迁移后其他用户刷新即可看到。")
+        ) {
+          const migrated = await migrateLocalData(workspaceId, {
+            documents: localSnapshot.documents,
+            graph: localSnapshot.graph,
+            outputs: localSnapshot.outputs,
+            recentActivities: localSnapshot.recentActivities,
+            revision: localSnapshot.revision,
+          });
+          if (!cancelled) dispatch({ type: "hydrateWorkspace", workspaceId, data: migrated });
+        } else {
+          dispatch({ type: "hydrateWorkspace", workspaceId, data });
+        }
+        loadedWorkspaceRef.current = workspaceId;
+      })
+      .catch(() => {
+        loadedWorkspaceRef.current = workspaceId;
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentWorkspace?.id, currentUser?.id]);
+
+  useEffect(() => {
+    if (!currentWorkspace || loadedWorkspaceRef.current !== workspaceId || !canEditCurrentWorkspace) return;
+    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(() => {
+      void saveWorkspaceDataset(workspaceId, {
+        documents: scopedState.documents,
+        graph: scopedState.graph,
+        outputs: scopedState.outputs,
+        recentActivities: scopedState.recentActivities,
+        revision: scopedState.revision,
+      });
+    }, 320);
+    return () => {
+      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    };
+  }, [canEditCurrentWorkspace, currentWorkspace, scopedState.documents, scopedState.graph, scopedState.outputs, scopedState.recentActivities, scopedState.revision, workspaceId]);
 
   function guardWrite() {
     if (canEditCurrentWorkspace) return true;
@@ -676,18 +759,22 @@ export function KnowledgeProvider({ children }: { children: ReactNode }) {
       ingestAnalysis: (file, content, analysis, parsed) => {
         if (!guardWrite()) return;
         dispatch({ type: "ingestAnalysis", workspaceId, file, content, analysis, parsed });
+        void recordRemoteActivity({ workspaceId, actionType: "upload", targetType: "document", targetId: file.name, detail: `上传并分析资料：${file.name}` });
       },
       deleteNode: (nodeId) => {
         if (!guardWrite()) return;
         dispatch({ type: "deleteNode", workspaceId, nodeId });
+        void recordRemoteActivity({ workspaceId, actionType: "delete", targetType: "graphNode", targetId: nodeId, detail: "删除星图节点" });
       },
       deleteDocument: (documentId) => {
         if (!guardWrite()) return;
         dispatch({ type: "deleteDocument", workspaceId, documentId });
+        void recordRemoteActivity({ workspaceId, actionType: "delete", targetType: "document", targetId: documentId, detail: "删除资料" });
       },
       clearGraph: () => {
         if (!guardWrite()) return;
         dispatch({ type: "clearGraph", workspaceId });
+        void recordRemoteActivity({ workspaceId, actionType: "clear", targetType: "workspace", targetId: workspaceId, detail: "清空知识星图" });
       },
       resetDemo: () => {
         if (!guardWrite()) return;
@@ -696,11 +783,12 @@ export function KnowledgeProvider({ children }: { children: ReactNode }) {
       addOutput: (output, relatedNodeId, nodeType) => {
         if (!guardWrite()) return;
         dispatch({ type: "addOutput", workspaceId, output, relatedNodeId, nodeType });
+        void recordRemoteActivity({ workspaceId, actionType: "generate", targetType: "output", targetId: output.id, detail: `保存成果：${output.title}` });
       },
       setCopilotContext: (context) => dispatch({ type: "setCopilotContext", context: context ? { ...context, workspaceId } : null }),
       recordAsk: (question) => {
-        if (!canEditCurrentWorkspace) return;
         dispatch({ type: "recordAsk", workspaceId, question });
+        void recordRemoteActivity({ workspaceId, actionType: "ask", targetType: "copilot", detail: question.slice(0, 180) });
       },
     }),
     [canEditCurrentWorkspace, currentAccess, currentWorkspace, scopedState, workspaceId],

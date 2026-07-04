@@ -10,6 +10,17 @@ import {
   workspaceAccess,
 } from "../services/authService";
 import {
+  getCurrentRemoteUser,
+  getLastWorkspaceId,
+  loginRemote,
+  logoutRemote,
+  registerRemote,
+  setLastWorkspaceId,
+  updateRemoteProfile,
+  updateRemoteUser,
+  type AuthSnapshot,
+} from "../services/backendDataService";
+import {
   ADMIN_PUBLIC_WORKSPACE_ID,
   ADMIN_USER_ID,
   privateWorkspaceId,
@@ -36,6 +47,8 @@ interface AuthState {
 type AuthAction =
   | { type: "login"; username: string; password: string }
   | { type: "register"; username: string; email: string; password: string }
+  | { type: "hydrate"; snapshot: AuthSnapshot }
+  | { type: "setError"; error: string }
   | { type: "logout" }
   | { type: "selectWorkspace"; workspaceId: string }
   | { type: "clearWorkspace" }
@@ -211,7 +224,27 @@ function publicFromUsers(users: AuthUserRecord[], userId: string) {
   return record ? toPublicUser(record) : null;
 }
 
+function stateFromSnapshot(state: AuthState, snapshot: AuthSnapshot): AuthState {
+  const users = ensureDefaultAdminUsers((snapshot.users?.length ? snapshot.users : [snapshot.user]) as AuthUserRecord[]);
+  const currentUserRecord = users.find((user) => user.id === snapshot.user.id) ?? ({ ...snapshot.user } as AuthUserRecord);
+  const currentWorkspaceId = snapshot.currentWorkspaceId ?? getLastWorkspaceId() ?? null;
+  return {
+    ...state,
+    users,
+    workspaces: ensureWorkspaceList(users, snapshot.workspaces ?? state.workspaces),
+    currentUser: toPublicUser(currentUserRecord),
+    currentWorkspaceId,
+    authError: null,
+    metrics: snapshot.metrics ?? state.metrics,
+    auditLogs: snapshot.auditLogs ?? state.auditLogs,
+    settings: snapshot.settings ?? { ...state.settings, storageMode: "api" },
+  };
+}
+
 function authReducer(state: AuthState, action: AuthAction): AuthState {
+  if (action.type === "hydrate") return stateFromSnapshot(state, action.snapshot);
+  if (action.type === "setError") return { ...state, authError: action.error };
+
   if (action.type === "login") {
     const normalizedUsers = ensureDefaultAdminUsers(state.users);
     const normalizedWorkspaces = ensureWorkspaceList(normalizedUsers, state.workspaces);
@@ -455,6 +488,20 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(authReducer, undefined, loadInitialAuthState);
 
+  useEffect(() => {
+    let cancelled = false;
+    getCurrentRemoteUser()
+      .then((snapshot) => {
+        if (!cancelled && snapshot) dispatch({ type: "hydrate", snapshot });
+      })
+      .catch(() => {
+        // Keep the local fallback state when the API is not available.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const currentWorkspace = useMemo(
     () => state.workspaces.find((workspace) => workspace.id === state.currentWorkspaceId) ?? null,
     [state.currentWorkspaceId, state.workspaces],
@@ -462,19 +509,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const currentAccess = useMemo(() => workspaceAccess(state.currentUser, currentWorkspace), [currentWorkspace, state.currentUser]);
 
   useEffect(() => {
-    window.localStorage.setItem(
-      AUTH_STORAGE_KEY,
-      JSON.stringify({
-        users: state.users,
-        workspaces: state.workspaces,
-        currentUser: state.currentUser,
-        currentWorkspaceId: state.currentWorkspaceId,
-        currentWorkspace,
-        metrics: state.metrics,
-        auditLogs: state.auditLogs,
-        settings: state.settings,
-      }),
-    );
+    setLastWorkspaceId(state.currentWorkspaceId);
+    window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify({ currentWorkspaceId: state.currentWorkspaceId }));
   }, [currentWorkspace, state]);
 
   const value = useMemo<AuthContextValue>(
@@ -488,19 +524,60 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       metrics: state.metrics,
       auditLogs: state.auditLogs,
       settings: state.settings,
-      login: (username, password) => dispatch({ type: "login", username, password }),
-      register: (username, email, password) => dispatch({ type: "register", username, email, password }),
-      logout: () => dispatch({ type: "logout" }),
-      selectWorkspace: (workspaceId) => dispatch({ type: "selectWorkspace", workspaceId }),
-      clearWorkspaceSelection: () => dispatch({ type: "clearWorkspace" }),
+      login: (username, password) => {
+        loginRemote(username, password)
+          .then((snapshot) => dispatch({ type: "hydrate", snapshot }))
+          .catch((error) => dispatch({ type: "setError", error: error instanceof Error ? error.message : "登录失败，请稍后重试。" }));
+      },
+      register: (username, email, password) => {
+        registerRemote(username, email, password)
+          .then((snapshot) => dispatch({ type: "hydrate", snapshot }))
+          .catch((error) => dispatch({ type: "setError", error: error instanceof Error ? error.message : "注册失败，请稍后重试。" }));
+      },
+      logout: () => {
+        void logoutRemote().finally(() => dispatch({ type: "logout" }));
+      },
+      selectWorkspace: (workspaceId) => {
+        setLastWorkspaceId(workspaceId);
+        dispatch({ type: "selectWorkspace", workspaceId });
+      },
+      clearWorkspaceSelection: () => {
+        setLastWorkspaceId(null);
+        dispatch({ type: "clearWorkspace" });
+      },
       publishWorkspace: (summary) => {
         if (currentWorkspace) dispatch({ type: "publishWorkspace", workspaceId: currentWorkspace.id, summary });
       },
       clearError: () => dispatch({ type: "clearError" }),
-      setUserEnabled: (userId, enabled) => dispatch({ type: "setUserEnabled", userId, enabled }),
-      deleteUser: (userId) => dispatch({ type: "deleteUser", userId }),
-      changePassword: (userId, password) => dispatch({ type: "changePassword", userId, password }),
-      updateProfile: (userId, username, email) => dispatch({ type: "updateProfile", userId, username, email }),
+      setUserEnabled: (userId, enabled) => {
+        updateRemoteUser(userId, enabled ? "enable" : "disable")
+          .then((snapshot) => dispatch({ type: "hydrate", snapshot }))
+          .catch(() => dispatch({ type: "setUserEnabled", userId, enabled }));
+      },
+      deleteUser: (userId) => {
+        updateRemoteUser(userId, "delete")
+          .then((snapshot) => dispatch({ type: "hydrate", snapshot }))
+          .catch(() => dispatch({ type: "deleteUser", userId }));
+      },
+      changePassword: (userId, password) => {
+        const request =
+          userId === state.currentUser?.id ? updateRemoteProfile({ username: state.currentUser.username, email: state.currentUser.email, password }) : updateRemoteUser(userId, "password", { password });
+        request
+          .then((snapshot) => dispatch({ type: "hydrate", snapshot }))
+          .catch((error) => {
+            if (error instanceof Error) dispatch({ type: "setError", error: error.message });
+            else dispatch({ type: "changePassword", userId, password });
+          });
+      },
+      updateProfile: (userId, username, email) => {
+        const request = userId === state.currentUser?.id ? updateRemoteProfile({ username, email }) : Promise.reject(new Error("只能修改当前账号资料。"));
+        request
+          .then((snapshot) => dispatch({ type: "hydrate", snapshot }))
+          .catch((error) => {
+            if (error instanceof Error) dispatch({ type: "setError", error: error.message });
+            else dispatch({ type: "updateProfile", userId, username, email });
+          });
+      },
       canRead: (workspace) => canReadWorkspace(state.currentUser, workspace),
       canEdit: (workspace) => canEditWorkspace(state.currentUser, workspace),
     }),

@@ -17,7 +17,7 @@
 - 前端：React 18、Vite、TypeScript、Tailwind CSS、Framer Motion、lucide-react
 - 图谱：vis-network、vis-data
 - 后端：Node.js 原生 HTTP 服务
-- 存储：当前 Demo 使用浏览器 `localStorage` 和后端内存/文件式轻量数据，后续可替换为数据库
+- 存储：后端服务端 JSON 数据库 `server/data/zhimai-db.json`，前端仅保存 session token 和最近 workspace 偏好，后续可替换为 SQLite/Postgres/MySQL
 
 ## 本地运行
 
@@ -50,13 +50,16 @@ http://localhost:3001
 
 系统初始化时会创建管理员种子账号；首次进入管理员后台会提示尽快修改密码。管理员可维护共享星图和系统设置，普通用户可查看管理员共享星图，也可进入个人星图上传和管理自己的资料。
 
-## 统一存储结构
+## 云端共享存储
 
-当前前端使用统一 store 收口核心数据，便于后续替换为真实数据库：
+当前核心业务数据以后端数据库为准，部署到服务器后不同浏览器和不同用户会读取同一份服务端数据：
 
-- `authStore`：用户、角色、登录状态、知识空间、权限、系统设置、访问统计、操作日志。
-- `knowledgeStore`：上传资料、解析状态、正文片段、星图节点、关系边、成果和活动记录。
-- `aiStatusStore`：AI 模型、Mock/API 状态、搜索、OCR 和来源可用性状态。
+- `users`：用户、角色、状态、密码哈希、最后登录 IP、在线状态。
+- `workspaces`：管理员共享星图和用户个人星图。
+- `workspaceData`：资料、正文片段、星图节点、关系边、成果和空间活动。
+- `loginLogs` / `activityLogs` / `trafficStats`：管理员后台统计和审计数据。
+
+`localStorage` 只用于保存 `zhimai-ai-session-token`、最近访问空间和旧 Demo 数据迁移检测，不再作为核心业务数据源。
 
 ## 环境变量
 
@@ -117,6 +120,9 @@ dist/
 
 2026-07-03：
 
+- 新增服务端 JSON 数据库和 token session，修复管理员共享星图、普通用户注册登录、后台成员/日志无法跨浏览器共享的问题。
+- 新增 workspace 云端读写接口，管理员写入 `admin_public_default` 后普通用户刷新即可读取共享资料、节点和关系，普通用户写共享空间会被拒绝。
+- 管理员后台改为读取后端真实 users、loginLogs、activityLogs 和 trafficStats。
 - 新增多用户登录、知识空间和权限控制。
 - 新增正式登录 / 注册流程，移除登录页和首页上的 Demo 密码提示。
 - 新增管理员“设置 / 管理后台”，包含成员管理、密码账号、访问概览、在线/IP、系统配置和操作日志。

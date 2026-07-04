@@ -1,26 +1,70 @@
 import { createServer } from "node:http";
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { createHash, randomBytes } from "node:crypto";
 
 const PORT = Number(process.env.PORT || process.env.API_PORT || 3001);
-const JSON_LIMIT_BYTES = 1024 * 1024 * 2;
+const JSON_LIMIT_BYTES = 1024 * 1024 * 12;
 
 const relationTypes = new Set(["mentions", "belongs_to", "uses", "depends_on", "solves", "generates", "related_to"]);
 const nodeTypes = new Set(["project", "document", "tech", "problem", "output", "tag", "concept"]);
 const ADMIN_USER_ID = "admin_default";
 const ADMIN_PUBLIC_WORKSPACE_ID = "admin_public_default";
+const DB_PATH = resolve(process.cwd(), process.env.ZHIMAI_DB_PATH || "server/data/zhimai-db.json");
 
-const demoUsers = [
-  { id: ADMIN_USER_ID, username: "admin", email: "admin@zhimai.local", role: "admin", isDemo: true },
-  { id: "user_default", username: "user", email: "user@zhimai.local", role: "user", isDemo: true },
-];
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function hashPassword(password, salt) {
+  return createHash("sha256").update(`${salt}:${password}`).digest("hex");
+}
+
+function createPasswordRecord(password) {
+  const salt = randomBytes(16).toString("hex");
+  return { passwordSalt: salt, passwordHash: hashPassword(password, salt) };
+}
+
+function verifyPassword(user, password) {
+  if (!user?.passwordHash || !user?.passwordSalt) return false;
+  return hashPassword(password, user.passwordSalt) === user.passwordHash;
+}
+
+function publicUser(user) {
+  if (!user) return null;
+  const { passwordHash, passwordSalt, ...safe } = user;
+  return safe;
+}
 
 function privateWorkspaceId(userId) {
   return `user_private_${userId}`;
 }
 
+function createAdminUser() {
+  const stamp = nowIso();
+  return {
+    id: ADMIN_USER_ID,
+    username: "admin",
+    email: "admin@zhimai.local",
+    role: "admin",
+    status: "active",
+    createdAt: stamp,
+    lastActiveAt: stamp,
+    lastLoginIp: "",
+    isOnline: false,
+    online: false,
+    enabled: true,
+    canManageWorkspace: true,
+    canAccessAdminPanel: true,
+    canEditAdminGraph: true,
+    mustChangePassword: true,
+    loginCount: 0,
+    ...createPasswordRecord("123456"),
+  };
+}
+
 function createWorkspace(user) {
-  const stamp = new Date().toISOString();
+  const stamp = nowIso();
   return {
     id: privateWorkspaceId(user.id),
     name: `${user.username} 的个人星图`,
@@ -34,36 +78,151 @@ function createWorkspace(user) {
   };
 }
 
-function listWorkspaces() {
-  const stamp = new Date().toISOString();
-  return [
-    {
-      id: ADMIN_PUBLIC_WORKSPACE_ID,
-      name: "管理员共享星图",
-      type: "admin_public",
-      ownerId: ADMIN_USER_ID,
-      visibility: "public",
-      createdAt: stamp,
-      updatedAt: stamp,
-      lastPublishedAt: stamp,
-      description: "管理员维护的共享知识空间。",
-      version: 1,
-      updateSummary: "初始化共享知识空间。",
-    },
-    ...demoUsers.map(createWorkspace),
-  ];
+function createAdminWorkspace() {
+  const stamp = nowIso();
+  return {
+    id: ADMIN_PUBLIC_WORKSPACE_ID,
+    name: "管理员共享星图",
+    type: "admin_public",
+    ownerId: ADMIN_USER_ID,
+    visibility: "public",
+    permissionMode: "admin_edit_user_read",
+    createdAt: stamp,
+    updatedAt: stamp,
+    lastPublishedAt: stamp,
+    description: "管理员维护的共享知识空间。",
+    version: 1,
+    updateSummary: "初始化共享知识空间。",
+  };
 }
 
-function userFromRequest(req) {
+function emptyDataset(workspaceId = ADMIN_PUBLIC_WORKSPACE_ID) {
+  return {
+    workspaceId,
+    documents: [],
+    graph: { nodes: [], edges: [] },
+    outputs: [],
+    recentActivities: [],
+    revision: 0,
+    updatedAt: nowIso(),
+  };
+}
+
+function defaultMetrics() {
+  return {
+    todayVisits: 0,
+    totalVisits: 0,
+    loginCount: 0,
+    uniqueVisitors: 0,
+    sharedGraphVisits: 0,
+    copilotUses: 0,
+    uploadCount: 0,
+  };
+}
+
+function defaultSettings() {
+  return {
+    siteName: "知脉 AI",
+    allowRegistration: true,
+    storageMode: "api",
+    version: "0.1.0",
+    updatedAt: nowIso(),
+  };
+}
+
+function normalizeDb(db) {
+  const stamp = nowIso();
+  const admin = createAdminUser();
+  const users = Array.isArray(db?.users) ? db.users : [];
+  const adminIndex = users.findIndex((user) => user.id === ADMIN_USER_ID || String(user.username).toLowerCase() === "admin" || user.role === "admin");
+  if (adminIndex === -1) {
+    users.unshift(admin);
+  } else {
+    users[adminIndex] = {
+      ...admin,
+      ...users[adminIndex],
+      id: ADMIN_USER_ID,
+      username: "admin",
+      role: "admin",
+      status: "active",
+      enabled: true,
+      canManageWorkspace: true,
+      canAccessAdminPanel: true,
+      canEditAdminGraph: true,
+      passwordHash: users[adminIndex].passwordHash || admin.passwordHash,
+      passwordSalt: users[adminIndex].passwordSalt || admin.passwordSalt,
+    };
+  }
+
+  const workspaces = Array.isArray(db?.workspaces) ? db.workspaces : [];
+  const workspaceMap = new Map(workspaces.map((workspace) => [workspace.id, workspace]));
+  workspaceMap.set(ADMIN_PUBLIC_WORKSPACE_ID, { ...createAdminWorkspace(), ...(workspaceMap.get(ADMIN_PUBLIC_WORKSPACE_ID) ?? {}) });
+  users.forEach((user) => {
+    const privateId = privateWorkspaceId(user.id);
+    if (!workspaceMap.has(privateId)) workspaceMap.set(privateId, createWorkspace(user));
+  });
+
+  const workspaceData = db?.workspaceData && typeof db.workspaceData === "object" ? db.workspaceData : {};
+  for (const workspace of workspaceMap.values()) {
+    workspaceData[workspace.id] = { ...emptyDataset(workspace.id), ...(workspaceData[workspace.id] ?? {}), workspaceId: workspace.id };
+  }
+
+  return {
+    users,
+    workspaces: [...workspaceMap.values()],
+    workspaceData,
+    sessions: Array.isArray(db?.sessions) ? db.sessions : [],
+    loginLogs: Array.isArray(db?.loginLogs) ? db.loginLogs : [],
+    activityLogs: Array.isArray(db?.activityLogs) ? db.activityLogs : [],
+    trafficStats: { ...defaultMetrics(), ...(db?.trafficStats ?? {}) },
+    settings: { ...defaultSettings(), ...(db?.settings ?? {}), storageMode: "api", updatedAt: db?.settings?.updatedAt ?? stamp },
+  };
+}
+
+function readDb() {
+  if (!existsSync(DB_PATH)) {
+    const initial = normalizeDb({});
+    saveDb(initial);
+    return initial;
+  }
+  try {
+    return normalizeDb(JSON.parse(readFileSync(DB_PATH, "utf8")));
+  } catch {
+    return normalizeDb({});
+  }
+}
+
+function saveDb(db) {
+  mkdirSync(dirname(DB_PATH), { recursive: true });
+  writeFileSync(DB_PATH, JSON.stringify(normalizeDb(db), null, 2), "utf8");
+}
+
+function listWorkspaces(db = readDb()) {
+  return db.workspaces;
+}
+
+function tokenFromRequest(req) {
+  const auth = String(req.headers.authorization || "");
+  if (auth.toLowerCase().startsWith("bearer ")) return auth.slice(7).trim();
+  return "";
+}
+
+function userFromRequest(req, db = readDb()) {
+  const token = tokenFromRequest(req);
+  if (token) {
+    const session = db.sessions.find((item) => item.token === token);
+    const user = session ? db.users.find((item) => item.id === session.userId) : null;
+    if (user) return user;
+  }
   const id = String(req.headers["x-zhimai-user-id"] || "");
   const role = String(req.headers["x-zhimai-user-role"] || "user");
-  const known = demoUsers.find((user) => user.id === id || user.username === id);
-  return known || { id: id || "anonymous", username: id || "anonymous", email: "", role: role === "admin" ? "admin" : "user" };
+  const known = db.users.find((user) => user.id === id || user.username === id);
+  return known || { id: id || "anonymous", username: id || "anonymous", email: "", role: role === "admin" ? "admin" : "user", status: "active" };
 }
 
-function workspaceFromRequest(req, payload = {}) {
+function workspaceFromRequest(req, payload = {}, db = readDb()) {
   const workspaceId = String(payload.workspaceId || req.headers["x-zhimai-workspace-id"] || ADMIN_PUBLIC_WORKSPACE_ID);
-  return listWorkspaces().find((workspace) => workspace.id === workspaceId) || null;
+  return listWorkspaces(db).find((workspace) => workspace.id === workspaceId) || null;
 }
 
 function canReadWorkspace(user, workspace) {
@@ -78,9 +237,9 @@ function canEditWorkspace(user, workspace) {
   return workspace.type === "user_private" && workspace.ownerId === user.id;
 }
 
-function enforceWorkspaceAccess(req, payload, mode) {
-  const user = userFromRequest(req);
-  const workspace = workspaceFromRequest(req, payload);
+function enforceWorkspaceAccess(req, payload, mode, db = readDb()) {
+  const user = userFromRequest(req, db);
+  const workspace = workspaceFromRequest(req, payload, db);
   const allowed = mode === "write" ? canEditWorkspace(user, workspace) : canReadWorkspace(user, workspace);
   if (!allowed) {
     const reason = workspace?.type === "admin_public" ? "你当前只有查看权限，不能修改管理员共享星图。" : "你没有访问或编辑该知识空间的权限。";
@@ -89,6 +248,96 @@ function enforceWorkspaceAccess(req, payload, mode) {
     throw error;
   }
   return { user, workspace };
+}
+
+function findUserByLogin(db, login) {
+  const normalized = String(login || "").trim().toLowerCase();
+  return db.users.find((user) => String(user.username).toLowerCase() === normalized || String(user.email).toLowerCase() === normalized);
+}
+
+function accessibleWorkspaces(db, user) {
+  return db.workspaces.filter((workspace) => canReadWorkspace(user, workspace));
+}
+
+function createToken(db, user, req) {
+  const token = randomBytes(32).toString("hex");
+  db.sessions = db.sessions.filter((session) => session.userId !== user.id);
+  db.sessions.push({
+    token,
+    userId: user.id,
+    createdAt: nowIso(),
+    lastSeenAt: nowIso(),
+    ip: requestIp(req),
+    userAgent: String(req.headers["user-agent"] || ""),
+  });
+  return token;
+}
+
+function requestIp(req) {
+  return String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "local").split(",")[0].trim();
+}
+
+function recordLogin(db, user, req, success, reason = "") {
+  db.loginLogs.unshift({
+    id: `login-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    userId: user?.id,
+    username: user?.username || "",
+    actorId: user?.id,
+    actorName: user?.username || "",
+    type: "login",
+    detail: success ? `${user.username} 登录系统` : reason,
+    ip: requestIp(req),
+    userAgent: String(req.headers["user-agent"] || ""),
+    loginAt: nowIso(),
+    createdAt: nowIso(),
+    success,
+    reason,
+  });
+  db.loginLogs = db.loginLogs.slice(0, 240);
+  if (success) {
+    db.trafficStats.loginCount += 1;
+    db.trafficStats.totalVisits += 1;
+    db.trafficStats.todayVisits += 1;
+    db.trafficStats.uniqueVisitors = new Set(db.users.filter((item) => item.lastLoginAt).map((item) => item.id)).size;
+  }
+}
+
+function recordActivity(db, { user, workspaceId, actionType, targetType = "", targetId = "", detail = "", req }) {
+  const log = {
+    id: `activity-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    userId: user?.id,
+    actorId: user?.id,
+    actorName: user?.username,
+    workspaceId,
+    type: actionType,
+    actionType,
+    targetType,
+    targetId,
+    detail,
+    ip: req ? requestIp(req) : "",
+    createdAt: nowIso(),
+  };
+  db.activityLogs.unshift(log);
+  db.activityLogs = db.activityLogs.slice(0, 300);
+  if (actionType === "upload") db.trafficStats.uploadCount += 1;
+  if (actionType === "ask") db.trafficStats.copilotUses += 1;
+  if (actionType === "enter_shared_graph") db.trafficStats.sharedGraphVisits += 1;
+  return log;
+}
+
+function authSnapshot(db, user, token = undefined, currentWorkspaceId = null) {
+  const safeUser = publicUser(user);
+  const admin = user?.role === "admin" && user?.canAccessAdminPanel !== false;
+  return {
+    ...(token ? { token } : {}),
+    user: safeUser,
+    users: admin ? db.users.map(publicUser) : [safeUser].filter(Boolean),
+    workspaces: accessibleWorkspaces(db, user),
+    currentWorkspaceId,
+    metrics: db.trafficStats,
+    auditLogs: admin ? [...db.loginLogs, ...db.activityLogs].slice(0, 180) : [],
+    settings: db.settings,
+  };
 }
 
 function loadEnvFile(fileName) {
@@ -670,11 +919,12 @@ function safeHost(url) {
 }
 
 async function route(req, res) {
+  const url = new URL(req.url || "/", "http://127.0.0.1");
   if (req.method === "OPTIONS") {
     jsonResponse(res, 204, {});
     return;
   }
-  if (req.method === "GET" && req.url === "/api/health") {
+  if (req.method === "GET" && url.pathname === "/api/health") {
     const config = getProviderConfig();
     const search = getSearchConfig();
     jsonResponse(res, 200, {
@@ -690,15 +940,62 @@ async function route(req, res) {
     });
     return;
   }
-  if (req.method === "GET" && req.url === "/api/auth/demo-users") {
-    jsonResponse(res, 200, { users: demoUsers.map(({ password, ...user }) => user) });
+  if (req.method === "GET" && url.pathname === "/api/auth/demo-users") {
+    const db = readDb();
+    jsonResponse(res, 200, { users: db.users.map(publicUser) });
     return;
   }
-  if (req.method === "GET" && req.url === "/api/workspaces") {
-    const user = userFromRequest(req);
+  if (req.method === "GET" && url.pathname === "/api/auth/me") {
+    const db = readDb();
+    const token = tokenFromRequest(req);
+    const session = db.sessions.find((item) => item.token === token);
+    const user = session ? db.users.find((item) => item.id === session.userId) : null;
+    if (!user) {
+      jsonResponse(res, 401, { error: "登录会话已失效，请重新登录。" });
+      return;
+    }
+    session.lastSeenAt = nowIso();
+    user.lastActiveAt = nowIso();
+    user.isOnline = true;
+    user.online = true;
+    saveDb(db);
+    jsonResponse(res, 200, authSnapshot(db, user, undefined, session.currentWorkspaceId ?? null));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/admin/overview") {
+    const db = readDb();
+    const user = userFromRequest(req, db);
+    if (user.role !== "admin" || user.canAccessAdminPanel === false) {
+      jsonResponse(res, 403, { error: "只有管理员可以查看后台数据。" });
+      return;
+    }
     jsonResponse(res, 200, {
-      workspaces: listWorkspaces().filter((workspace) => canReadWorkspace(user, workspace)),
+      users: db.users.map(publicUser),
+      loginLogs: db.loginLogs,
+      activityLogs: db.activityLogs,
+      metrics: db.trafficStats,
+      settings: db.settings,
     });
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/workspaces") {
+    const db = readDb();
+    const user = userFromRequest(req, db);
+    jsonResponse(res, 200, {
+      workspaces: accessibleWorkspaces(db, user),
+    });
+    return;
+  }
+  const dataMatch = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/data$/);
+  if (req.method === "GET" && dataMatch) {
+    const db = readDb();
+    const workspaceId = decodeURIComponent(dataMatch[1]);
+    const { user, workspace } = enforceWorkspaceAccess(req, { workspaceId }, "read", db);
+    if (workspace.type === "admin_public") {
+      recordActivity(db, { user, workspaceId, actionType: "enter_shared_graph", targetType: "workspace", targetId: workspaceId, detail: "进入管理员共享星图", req });
+      saveDb(db);
+    }
+    jsonResponse(res, 200, db.workspaceData[workspaceId] ?? emptyDataset(workspaceId));
     return;
   }
   if (req.method !== "POST") {
@@ -708,37 +1005,255 @@ async function route(req, res) {
 
   try {
     const payload = await readJson(req);
-    if (req.url === "/api/auth/login") {
+    if (url.pathname === "/api/auth/login") {
+      const db = readDb();
       const username = String(payload.username || "").trim().toLowerCase();
       const password = String(payload.password || "");
-      const user = demoUsers.find((item) => item.username === username || item.email === username);
-      if (!user || !password.trim()) {
-        jsonResponse(res, 401, { error: "Demo 登录需要输入已存在账号和任意非空密码。" });
+      const user = findUserByLogin(db, username);
+      if (!user) {
+        recordLogin(db, { username }, req, false, "账号不存在，请检查账号或先注册。");
+        saveDb(db);
+        jsonResponse(res, 404, { error: "账号不存在，请检查账号或先注册。" });
         return;
       }
-      jsonResponse(res, 200, {
+      if (user.status === "disabled" || user.enabled === false) {
+        recordLogin(db, user, req, false, "该账号已被停用，请联系管理员。");
+        saveDb(db);
+        jsonResponse(res, 403, { error: "该账号已被停用，请联系管理员。" });
+        return;
+      }
+      if (!verifyPassword(user, password)) {
+        recordLogin(db, user, req, false, "密码错误，请重新输入。");
+        saveDb(db);
+        jsonResponse(res, 401, { error: "密码错误，请重新输入。" });
+        return;
+      }
+      const token = createToken(db, user, req);
+      user.lastLoginAt = nowIso();
+      user.lastLoginIp = requestIp(req);
+      user.lastIp = user.lastLoginIp;
+      user.lastActiveAt = nowIso();
+      user.isOnline = true;
+      user.online = true;
+      user.loginCount = (user.loginCount ?? 0) + 1;
+      recordLogin(db, user, req, true);
+      saveDb(db);
+      jsonResponse(res, 200, authSnapshot(db, user, token));
+      return;
+    }
+    if (url.pathname === "/api/auth/register") {
+      const db = readDb();
+      if (db.settings.allowRegistration === false) {
+        jsonResponse(res, 403, { error: "当前系统未开放注册。" });
+        return;
+      }
+      const username = String(payload.username || "").trim();
+      const email = String(payload.email || "").trim();
+      const password = String(payload.password || "");
+      if (username.length < 2 || email.length < 3 || password.length < 6) {
+        jsonResponse(res, 400, { error: "请填写有效用户名、邮箱/账号和至少 6 位密码。" });
+        return;
+      }
+      if (username.toLowerCase() === "admin" || email.toLowerCase() === "admin" || email.toLowerCase() === "admin@zhimai.local") {
+        jsonResponse(res, 409, { error: "admin 为系统管理员账号，不能用于注册。" });
+        return;
+      }
+      if (findUserByLogin(db, username) || findUserByLogin(db, email)) {
+        jsonResponse(res, 409, { error: "该用户名或邮箱/账号已存在。" });
+        return;
+      }
+      const stamp = nowIso();
+      const user = {
+        id: `user_${Date.now()}_${randomBytes(4).toString("hex")}`,
+        username,
+        email,
+        role: "user",
+        status: "active",
+        createdAt: stamp,
+        lastLoginAt: stamp,
+        lastLoginIp: requestIp(req),
+        lastIp: requestIp(req),
+        lastActiveAt: stamp,
+        isOnline: true,
+        online: true,
+        enabled: true,
+        canManageWorkspace: false,
+        canAccessAdminPanel: false,
+        canEditAdminGraph: false,
+        loginCount: 1,
+        ...createPasswordRecord(password),
+      };
+      db.users.push(user);
+      db.workspaces.push(createWorkspace(user));
+      db.workspaceData[privateWorkspaceId(user.id)] = emptyDataset(privateWorkspaceId(user.id));
+      const token = createToken(db, user, req);
+      recordLogin(db, user, req, true);
+      recordActivity(db, { user, workspaceId: privateWorkspaceId(user.id), actionType: "register", targetType: "user", targetId: user.id, detail: `${username} 注册并创建个人星图`, req });
+      saveDb(db);
+      jsonResponse(res, 200, authSnapshot(db, user, token));
+      return;
+    }
+    if (url.pathname === "/api/auth/logout") {
+      const db = readDb();
+      const token = tokenFromRequest(req);
+      const session = db.sessions.find((item) => item.token === token);
+      const user = session ? db.users.find((item) => item.id === session.userId) : null;
+      if (user) {
+        user.isOnline = false;
+        user.online = false;
+        user.lastActiveAt = nowIso();
+        recordActivity(db, { user, workspaceId: payload.workspaceId, actionType: "logout", targetType: "user", targetId: user.id, detail: `${user.username} 退出登录`, req });
+      }
+      db.sessions = db.sessions.filter((item) => item.token !== token);
+      saveDb(db);
+      jsonResponse(res, 200, { ok: true });
+      return;
+    }
+    if (url.pathname === "/api/auth/profile") {
+      const db = readDb();
+      const user = userFromRequest(req, db);
+      const username = String(payload.username || user.username).trim();
+      const email = String(payload.email || user.email).trim();
+      if (username.length < 2 || email.length < 3) {
+        jsonResponse(res, 400, { error: "用户名和邮箱/账号不能为空。" });
+        return;
+      }
+      if (username.toLowerCase() === "admin" && user.username !== "admin") {
+        jsonResponse(res, 409, { error: "admin 为系统管理员账号，不能用于普通用户。" });
+        return;
+      }
+      const duplicated = db.users.some((item) => item.id !== user.id && (String(item.username).toLowerCase() === username.toLowerCase() || String(item.email).toLowerCase() === email.toLowerCase()));
+      if (duplicated) {
+        jsonResponse(res, 409, { error: "用户名或邮箱/账号已被占用。" });
+        return;
+      }
+      user.username = user.username === "admin" ? "admin" : username;
+      user.email = email;
+      user.lastActiveAt = nowIso();
+      if (payload.password) {
+        if (String(payload.password).length < 6) throw new Error("新密码至少需要 6 位。");
+        Object.assign(user, createPasswordRecord(String(payload.password)), { mustChangePassword: false });
+      }
+      recordActivity(db, { user, workspaceId: payload.workspaceId, actionType: "settings", targetType: "user", targetId: user.id, detail: "更新个人资料", req });
+      saveDb(db);
+      jsonResponse(res, 200, authSnapshot(db, user));
+      return;
+    }
+    if (url.pathname === "/api/admin/users") {
+      const db = readDb();
+      const admin = userFromRequest(req, db);
+      if (admin.role !== "admin" || admin.canAccessAdminPanel === false) throw Object.assign(new Error("只有管理员可以管理用户。"), { statusCode: 403 });
+      const user = db.users.find((item) => item.id === payload.userId);
+      if (!user) throw Object.assign(new Error("用户不存在。"), { statusCode: 404 });
+      if (user.id === admin.id && (payload.action === "disable" || payload.action === "delete")) throw new Error("不能停用或删除当前管理员账号。");
+      if (payload.action === "enable" || payload.action === "disable") {
+        user.status = payload.action === "enable" ? "active" : "disabled";
+        user.enabled = payload.action === "enable";
+        if (!user.enabled) user.isOnline = false;
+      } else if (payload.action === "delete") {
+        db.users = db.users.filter((item) => item.id !== user.id);
+        db.workspaces = db.workspaces.filter((workspace) => workspace.ownerId !== user.id);
+        delete db.workspaceData[privateWorkspaceId(user.id)];
+      } else if (payload.action === "password") {
+        Object.assign(user, createPasswordRecord(String(payload.password || "")), { mustChangePassword: true });
+      }
+      recordActivity(db, { user: admin, workspaceId: ADMIN_PUBLIC_WORKSPACE_ID, actionType: "settings", targetType: "user", targetId: payload.userId, detail: `管理员执行用户操作：${payload.action}`, req });
+      saveDb(db);
+      jsonResponse(res, 200, authSnapshot(db, admin));
+      return;
+    }
+    if (dataMatch && url.pathname.endsWith("/data")) {
+      const db = readDb();
+      const workspaceId = decodeURIComponent(dataMatch[1]);
+      const { user, workspace } = enforceWorkspaceAccess(req, { workspaceId }, "write", db);
+      const current = db.workspaceData[workspaceId] ?? emptyDataset(workspaceId);
+      const nextData = {
+        ...current,
+        documents: Array.isArray(payload.documents) ? payload.documents : current.documents,
+        graph: payload.graph && Array.isArray(payload.graph.nodes) && Array.isArray(payload.graph.edges) ? payload.graph : current.graph,
+        outputs: Array.isArray(payload.outputs) ? payload.outputs : current.outputs,
+        recentActivities: Array.isArray(payload.recentActivities) ? payload.recentActivities : current.recentActivities,
+        revision: (current.revision ?? 0) + 1,
+        workspaceId,
+        updatedAt: nowIso(),
+      };
+      db.workspaceData[workspaceId] = nextData;
+      const activityType = nextData.documents.length > current.documents.length ? "upload" : "sync_workspace";
+      recordActivity(db, { user, workspaceId, actionType: activityType, targetType: "workspace", targetId: workspaceId, detail: `同步空间数据：${workspace.name}`, req });
+      const workspaceRecord = db.workspaces.find((item) => item.id === workspaceId);
+      if (workspaceRecord) {
+        workspaceRecord.updatedAt = nowIso();
+        workspaceRecord.version = (workspaceRecord.version ?? 1) + 1;
+        if (workspaceRecord.type === "admin_public") workspaceRecord.lastPublishedAt = nowIso();
+      }
+      saveDb(db);
+      jsonResponse(res, 200, nextData);
+      return;
+    }
+    if (url.pathname === "/api/activity") {
+      const db = readDb();
+      const user = userFromRequest(req, db);
+      recordActivity(db, {
         user,
-        workspaces: listWorkspaces().filter((workspace) => canReadWorkspace(user, workspace)),
+        workspaceId: payload.workspaceId,
+        actionType: String(payload.actionType || "activity"),
+        targetType: String(payload.targetType || ""),
+        targetId: String(payload.targetId || ""),
+        detail: String(payload.detail || ""),
+        req,
+      });
+      user.lastActiveAt = nowIso();
+      user.isOnline = true;
+      user.online = true;
+      saveDb(db);
+      jsonResponse(res, 200, { ok: true });
+      return;
+    }
+    if (url.pathname === "/api/migrate-local-data") {
+      const db = readDb();
+      const user = userFromRequest(req, db);
+      const workspaceId = String(payload.workspaceId || ADMIN_PUBLIC_WORKSPACE_ID);
+      enforceWorkspaceAccess(req, { workspaceId }, "write", db);
+      const data = payload.data ?? {};
+      db.workspaceData[workspaceId] = {
+        ...emptyDataset(workspaceId),
+        documents: Array.isArray(data.documents) ? data.documents : [],
+        graph: data.graph && Array.isArray(data.graph.nodes) && Array.isArray(data.graph.edges) ? data.graph : { nodes: [], edges: [] },
+        outputs: Array.isArray(data.outputs) ? data.outputs : [],
+        recentActivities: Array.isArray(data.recentActivities) ? data.recentActivities : [],
+        revision: (db.workspaceData[workspaceId]?.revision ?? 0) + 1,
+        updatedAt: nowIso(),
+      };
+      recordActivity(db, { user, workspaceId, actionType: "migrate_local_data", targetType: "workspace", targetId: workspaceId, detail: "迁移本地 Demo 数据到云端共享星图", req });
+      saveDb(db);
+      jsonResponse(res, 200, db.workspaceData[workspaceId]);
+      return;
+    }
+    if (url.pathname === "/api/ai/analyze") {
+      const db = readDb();
+      enforceWorkspaceAccess(req, payload, "write", db);
+      jsonResponse(res, 200, {
+        ...(await analyze(payload)),
       });
       return;
     }
-    if (req.url === "/api/ai/analyze") {
-      enforceWorkspaceAccess(req, payload, "write");
-      jsonResponse(res, 200, await analyze(payload));
-      return;
-    }
-    if (req.url === "/api/ai/ask") {
-      enforceWorkspaceAccess(req, payload, "read");
+    if (url.pathname === "/api/ai/ask") {
+      const db = readDb();
+      const { user, workspace } = enforceWorkspaceAccess(req, payload, "read", db);
+      recordActivity(db, { user, workspaceId: workspace?.id, actionType: "ask", targetType: "copilot", detail: String(payload.question || "").slice(0, 120), req });
+      saveDb(db);
       jsonResponse(res, 200, await ask(payload));
       return;
     }
-    if (req.url === "/api/ai/generate-output") {
-      enforceWorkspaceAccess(req, payload, "write");
+    if (url.pathname === "/api/ai/generate-output") {
+      const db = readDb();
+      enforceWorkspaceAccess(req, payload, "write", db);
       jsonResponse(res, 200, await generateOutput(payload));
       return;
     }
-    if (req.url === "/api/search") {
-      enforceWorkspaceAccess(req, payload, "read");
+    if (url.pathname === "/api/search") {
+      const db = readDb();
+      enforceWorkspaceAccess(req, payload, "read", db);
       const result = await searchWeb(payload);
       jsonResponse(res, result.warning ? 501 : 200, result);
       return;

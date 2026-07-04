@@ -14,9 +14,11 @@ export interface ZhimaiUser {
   status?: UserStatus;
   createdAt: string;
   lastLoginAt?: string;
+  lastLoginIp?: string;
   lastActiveAt?: string;
   lastIp?: string;
   online?: boolean;
+  isOnline?: boolean;
   enabled?: boolean;
   canManageWorkspace?: boolean;
   canAccessAdminPanel?: boolean;

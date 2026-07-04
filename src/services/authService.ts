@@ -9,6 +9,7 @@ import {
   type WorkspaceType,
   type ZhimaiUser,
 } from "../types/workspace";
+import { getLastWorkspaceId, getSessionToken } from "./backendDataService";
 
 export const AUTH_STORAGE_KEY = "zhimai-ai-auth-v1";
 
@@ -138,6 +139,14 @@ export function getStoredAuthSnapshot() {
 }
 
 export function getAuthHeaders(): Record<string, string> {
+  const token = getSessionToken();
+  const lastWorkspaceId = getLastWorkspaceId();
+  if (token) {
+    return {
+      Authorization: `Bearer ${token}`,
+      ...(lastWorkspaceId ? { "X-Zhimai-Workspace-Id": lastWorkspaceId } : {}),
+    };
+  }
   const snapshot = getStoredAuthSnapshot();
   const user = snapshot?.currentUser as ZhimaiUser | null | undefined;
   const workspace = snapshot?.currentWorkspace as Workspace | null | undefined;

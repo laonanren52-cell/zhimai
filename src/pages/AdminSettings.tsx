@@ -15,9 +15,10 @@ import {
   UsersRound,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import AiModeBadge from "../components/common/AiModeBadge";
 import WorkspaceBadge from "../components/common/WorkspaceBadge";
+import { getAdminOverview, type AdminOverview } from "../services/backendDataService";
 import { roleLabel, workspaceTypeLabel } from "../services/authService";
 import { useAiStatus } from "../store/aiStatusStore";
 import { useAuthStore } from "../store/authStore";
@@ -45,17 +46,37 @@ export default function AdminSettings() {
   const [profileName, setProfileName] = useState(currentUser?.username ?? "");
   const [profileEmail, setProfileEmail] = useState(currentUser?.email ?? "");
   const [notice, setNotice] = useState<string | null>(null);
+  const [overview, setOverview] = useState<AdminOverview | null>(null);
 
+  useEffect(() => {
+    if (currentUser?.role !== "admin" || currentUser.canAccessAdminPanel === false) return;
+    let cancelled = false;
+    getAdminOverview()
+      .then((nextOverview) => {
+        if (!cancelled) setOverview(nextOverview);
+      })
+      .catch(() => {
+        // The local store remains as a fallback if the backend is temporarily unavailable.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser?.id, currentUser?.role, currentUser?.canAccessAdminPanel]);
+
+  const displayUsers = overview?.users ?? users;
+  const displayMetrics = overview?.metrics ?? metrics;
+  const displaySettings = overview?.settings ?? settings;
+  const displayAuditLogs = overview ? [...overview.loginLogs, ...overview.activityLogs] : auditLogs;
   const filteredUsers = useMemo(() => {
     const keyword = userSearch.trim().toLowerCase();
-    if (!keyword) return users;
-    return users.filter((user) => `${user.username} ${user.email} ${user.role}`.toLowerCase().includes(keyword));
-  }, [userSearch, users]);
+    if (!keyword) return displayUsers;
+    return displayUsers.filter((user) => `${user.username} ${user.email} ${user.role}`.toLowerCase().includes(keyword));
+  }, [displayUsers, userSearch]);
 
   const uploadCount = state.recentActivities.filter((activity) => activity.type === "upload").length;
   const askCount = state.recentActivities.filter((activity) => activity.type === "ask").length;
   const generateCount = state.recentActivities.filter((activity) => activity.type === "generate").length;
-  const onlineUsers = users.filter((user) => user.online);
+  const onlineUsers = displayUsers.filter((user) => user.online || user.isOnline);
   const adminWorkspace = workspaces.find((workspace) => workspace.type === "admin_public");
 
   if (currentUser?.role !== "admin" || currentUser.canAccessAdminPanel === false) {
@@ -116,9 +137,9 @@ export default function AdminSettings() {
       )}
 
       <section className="admin-metrics-grid mb-5 grid gap-4">
-        <AdminMetric icon={<UsersRound className="h-4 w-4" />} label="成员数" value={`${users.length}`} detail={`${onlineUsers.length} 人在线`} />
-        <AdminMetric icon={<Activity className="h-4 w-4" />} label="今日访问" value={`${metrics.todayVisits}`} detail={`总访问 ${metrics.totalVisits}`} />
-        <AdminMetric icon={<ShieldCheck className="h-4 w-4" />} label="共享星图访问" value={`${metrics.sharedGraphVisits}`} detail={adminWorkspace?.name ?? "管理员共享星图"} />
+        <AdminMetric icon={<UsersRound className="h-4 w-4" />} label="成员数" value={`${displayUsers.length}`} detail={`${onlineUsers.length} 人在线`} />
+        <AdminMetric icon={<Activity className="h-4 w-4" />} label="今日访问" value={`${displayMetrics.todayVisits}`} detail={`总访问 ${displayMetrics.totalVisits}`} />
+        <AdminMetric icon={<ShieldCheck className="h-4 w-4" />} label="共享星图访问" value={`${displayMetrics.sharedGraphVisits}`} detail={adminWorkspace?.name ?? "管理员共享星图"} />
         <AdminMetric icon={<Database className="h-4 w-4" />} label="资料 / 节点" value={`${state.documents.length} / ${state.graph.nodes.length}`} detail={`${state.graph.edges.length} 条关系`} />
         <AdminMetric icon={<MonitorDot className="h-4 w-4" />} label="Copilot / 生成" value={`${askCount} / ${generateCount}`} detail={`${uploadCount} 次上传记录`} />
       </section>
@@ -156,7 +177,7 @@ export default function AdminSettings() {
                         </div>
                         <p className="mt-2 truncate text-sm text-[var(--text-muted)]">{user.email}</p>
                         <p className="mt-2 text-xs text-[var(--text-faint)]">
-                          注册 {formatDate(user.createdAt)} · 最近活跃 {formatDate(user.lastActiveAt)} · 最近 IP {user.lastIp ?? "local-session"}
+                          注册 {formatDate(user.createdAt)} · 最近活跃 {formatDate(user.lastActiveAt)} · 最近 IP {user.lastLoginIp ?? user.lastIp ?? "local-session"}
                         </p>
                         <p className="mt-1 text-xs text-[var(--text-faint)]">
                           共享星图：可访问 · 个人星图：{privateWorkspace ? "已创建" : "未创建"} · 登录 {user.loginCount ?? 0} 次
@@ -223,9 +244,9 @@ export default function AdminSettings() {
             </div>
             <div className="grid gap-3">
               {[
-                ["站点名称", settings.siteName],
-                ["存储模式", settings.storageMode === "local" ? "本地统一 store" : "API 数据源"],
-                ["版本", settings.version],
+                ["站点名称", displaySettings.siteName],
+                ["存储模式", displaySettings.storageMode === "local" ? "本地统一 store" : "API 数据源"],
+                ["版本", displaySettings.version],
                 ["AI 模型", aiStatus.providerLabel],
                 ["联网搜索", aiStatus.searchEnabled ? `已配置 ${aiStatus.searchProvider}` : "未配置"],
                 ["OCR", aiStatus.ocrEnabled ? "已开启" : "未配置"],
@@ -251,7 +272,7 @@ export default function AdminSettings() {
               onlineUsers.map((user) => (
                 <div key={user.id} className="micro-card p-4">
                   <p className="text-sm font-semibold text-[var(--text-primary)]">{user.username}</p>
-                  <p className="mt-2 text-xs text-[var(--text-faint)]">最近 IP：{user.lastIp ?? "local-session"}</p>
+                  <p className="mt-2 text-xs text-[var(--text-faint)]">最近 IP：{user.lastLoginIp ?? user.lastIp ?? "local-session"}</p>
                   <p className="mt-1 text-xs text-[var(--text-faint)]">最近活跃：{formatDate(user.lastActiveAt)}</p>
                   <p className="mt-1 text-xs text-[var(--text-faint)]">最近页面：{user.role === "admin" ? "管理后台" : "知识工作台"}</p>
                 </div>
@@ -268,7 +289,7 @@ export default function AdminSettings() {
             <h2 className="text-xl font-semibold text-[var(--text-primary)]">操作日志</h2>
           </div>
           <div className="thin-scrollbar max-h-[360px] space-y-2 overflow-y-auto pr-1">
-            {[...auditLogs, ...state.recentActivities.map((activity) => ({ id: activity.id, type: activity.type, actorName: currentUser.username, detail: activity.title, createdAt: activity.createdAt }))].slice(0, 24).map((log) => (
+            {[...displayAuditLogs, ...state.recentActivities.map((activity) => ({ id: activity.id, type: activity.type, actorName: currentUser.username, detail: activity.title, createdAt: activity.createdAt }))].slice(0, 24).map((log) => (
               <div key={log.id} className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-soft)] px-4 py-3">
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-sm font-medium text-[var(--text-primary)]">{log.detail}</span>
