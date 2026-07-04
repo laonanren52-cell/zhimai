@@ -1,97 +1,132 @@
-import { ArrowRight, DatabaseZap, LogIn } from "lucide-react";
+import { ArrowRight, DatabaseZap, KeyRound, Loader2, LogIn, Network, Settings2, ShieldCheck } from "lucide-react";
 import { useState } from "react";
+import { AuthGlassCard, AuthVisualShell, LiquidInput, MagneticButton } from "../components/common/AuthVisualShell";
 import { useAuthStore } from "../store/authStore";
 
 interface LoginProps {
   onRegister: () => void;
 }
 
+const features = [
+  {
+    title: "知识空间",
+    detail: "个人星图与管理员共享星图分层管理，资料权限边界清晰。",
+    icon: Network,
+  },
+  {
+    title: "来源可信",
+    detail: "每次问答、总结和成果生成都回到真实片段与节点关系。",
+    icon: ShieldCheck,
+  },
+  {
+    title: "管理后台",
+    detail: "成员、访问日志、共享星图和系统配置统一管理。",
+    icon: Settings2,
+  },
+];
+
 export default function Login({ onRegister }: LoginProps) {
   const { login, authError, clearError } = useAuthStore();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
-  function submit() {
+  async function submit() {
     clearError();
-    login(username, password);
+    setLocalError(null);
+    if (!username.trim()) {
+      setLocalError("请输入账号或邮箱。");
+      return;
+    }
+    if (!password) {
+      setLocalError("请输入密码。");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      await login(username, password);
+    } catch {
+      // The auth store already exposes a user-facing error message.
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
-    <main className="auth-page thin-scrollbar relative min-h-screen overflow-x-hidden bg-[var(--page-bg)] px-4 py-8 text-[var(--text-secondary)]">
-      <div className="cosmic-backdrop" />
-      <div className="aurora-layer" />
-      <div className="noise-layer" />
-      <section className="auth-shell relative z-10 mx-auto grid min-h-[calc(100vh-4rem)] max-w-6xl gap-6 lg:grid-cols-[minmax(0,1fr)_420px] lg:items-center">
-        <div className="fade-in max-w-3xl">
-          <p className="page-kicker">ZHIMAI AI · Private Knowledge Graph</p>
-          <h1 className="page-title">
-            登录知脉 AI
-            <span className="block text-[var(--text-secondary)]">进入你的知识星图工作台</span>
-          </h1>
-          <p className="page-subtitle max-w-2xl">
-            将资料、项目、问题和成果沉淀为可追溯的个人知识资产。系统会围绕来源片段、节点关系和权限空间组织你的工作流。
-          </p>
-          <div className="mt-7 grid gap-3 sm:grid-cols-3">
-            {[
-              ["知识空间", "个人星图与共享星图分离，权限边界清晰。"],
-              ["来源可信", "回答、总结和成果生成都回到片段依据。"],
-              ["管理后台", "成员、访问、配置与日志统一进入后台。"],
-            ].map(([title, detail]) => (
-              <div key={title} className="micro-card p-4">
-                <p className="text-sm font-semibold text-[var(--text-primary)]">{title}</p>
-                <p className="mt-2 text-xs leading-6 text-[var(--text-faint)]">{detail}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-
+    <AuthVisualShell
+      kicker="ZHIMAI AI · Private Knowledge Graph"
+      title="登录知脉 AI"
+      subtitle="进入你的个人知识星图工作台，把资料、项目、问题和成果沉淀成可追溯的知识资产。"
+      features={features}
+    >
+      <AuthGlassCard>
         <form
-          className="lux-card fade-in auth-card rounded-3xl p-6 md:p-8"
+          className="auth-form"
+          aria-busy={submitting}
           onSubmit={(event) => {
             event.preventDefault();
-            submit();
+            void submit();
           }}
         >
-          <div className="mb-6 flex items-center gap-3">
-            <span className="grid h-12 w-12 place-items-center rounded-2xl bg-[var(--accent)] text-[var(--on-accent)] shadow-[0_0_28px_var(--glow-accent)]">
-              <DatabaseZap className="h-5 w-5" />
+          <div className="auth-card-header">
+            <span className="auth-logo-orb">
+              <DatabaseZap className="h-6 w-6" />
             </span>
             <div>
-              <h2 className="text-2xl font-semibold text-[var(--text-primary)]">账号登录</h2>
-              <p className="text-xs text-[var(--text-faint)]">使用已注册账号进入知识空间</p>
+              <p className="auth-card-kicker">Secure Workspace</p>
+              <h2>账号登录</h2>
             </div>
           </div>
 
-          <div className="space-y-4">
-            <label className="block">
-              <span className="mb-2 block text-sm text-[var(--text-secondary)]">邮箱 / 账号</span>
-              <input value={username} onChange={(event) => setUsername(event.target.value)} className="input-shell w-full rounded-2xl px-4 py-3 text-sm" placeholder="输入账号或邮箱" autoComplete="username" />
-            </label>
-            <label className="block">
-              <span className="mb-2 block text-sm text-[var(--text-secondary)]">密码</span>
-              <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" className="input-shell w-full rounded-2xl px-4 py-3 text-sm" placeholder="输入密码" autoComplete="current-password" />
-            </label>
+          <div className="auth-field-stack">
+            <LiquidInput
+              label="邮箱 / 账号"
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              autoComplete="username"
+              autoFocus
+            />
+            <LiquidInput
+              label="密码"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              type="password"
+              autoComplete="current-password"
+            />
           </div>
 
-          {authError && <p className="mt-4 rounded-2xl border border-[var(--danger-border)] bg-[var(--danger-bg)] px-4 py-3 text-sm text-[var(--danger)]">{authError}</p>}
+          {(localError || authError) && (
+            <p className="auth-error" role="alert">
+              {localError || authError}
+            </p>
+          )}
 
-          <button type="submit" className="btn-primary mt-6 w-full justify-center py-3">
-            <LogIn className="h-4 w-4" />
-            登录
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              clearError();
-              onRegister();
-            }}
-            className="mt-3 flex w-full items-center justify-center gap-2 rounded-full px-4 py-2 text-sm text-[var(--text-muted)] transition hover:text-[var(--accent)]"
-          >
-            新用户注册
-            <ArrowRight className="h-4 w-4" />
-          </button>
+          <MagneticButton type="submit" loading={submitting} className="mt-7">
+            {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
+            {submitting ? "登录中" : "登录知脉 AI"}
+          </MagneticButton>
+
+          <div className="auth-card-links">
+            <button
+              type="button"
+              onClick={() => {
+                clearError();
+                setLocalError(null);
+                onRegister();
+              }}
+            >
+              新用户注册
+              <ArrowRight className="h-4 w-4" />
+            </button>
+            <button type="button" aria-label="忘记密码，当前版本为占位入口">
+              <KeyRound className="h-4 w-4" />
+              忘记密码
+            </button>
+          </div>
         </form>
-      </section>
-    </main>
+      </AuthGlassCard>
+    </AuthVisualShell>
   );
 }

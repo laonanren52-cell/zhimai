@@ -60,18 +60,28 @@ export function setLastWorkspaceId(workspaceId?: string | null) {
 
 async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getSessionToken();
-  const response = await fetch(`${apiBaseUrl}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(options.headers ?? {}),
-    },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${apiBaseUrl}${path}`, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(options.headers ?? {}),
+      },
+    });
+  } catch {
+    throw new Error("网络异常，请确认后端服务已启动或 API 地址配置正确。");
+  }
   const text = await response.text();
-  const payload = text ? JSON.parse(text) : {};
+  let payload: Record<string, unknown> = {};
+  try {
+    payload = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+  } catch {
+    payload = { error: text || "后端返回了无法解析的响应。" };
+  }
   if (!response.ok) {
-    throw new Error(payload?.error || `后端数据服务请求失败：${response.status}`);
+    throw new Error(typeof payload.error === "string" ? payload.error : `后端数据服务请求失败：${response.status}`);
   }
   return payload as T;
 }

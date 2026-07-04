@@ -69,8 +69,8 @@ interface AuthContextValue {
   metrics: SystemMetrics;
   auditLogs: SystemAuditLog[];
   settings: SystemSettings;
-  login: (username: string, password: string) => void;
-  register: (username: string, email: string, password: string) => void;
+  login: (username: string, password: string) => Promise<void>;
+  register: (username: string, email: string, password: string) => Promise<void>;
   logout: () => void;
   selectWorkspace: (workspaceId: string) => void;
   clearWorkspaceSelection: () => void;
@@ -524,15 +524,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       metrics: state.metrics,
       auditLogs: state.auditLogs,
       settings: state.settings,
-      login: (username, password) => {
-        loginRemote(username, password)
-          .then((snapshot) => dispatch({ type: "hydrate", snapshot }))
-          .catch((error) => dispatch({ type: "setError", error: error instanceof Error ? error.message : "登录失败，请稍后重试。" }));
+      login: async (username, password) => {
+        try {
+          const snapshot = await loginRemote(username, password);
+          dispatch({ type: "hydrate", snapshot });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "登录失败，请稍后重试。";
+          dispatch({ type: "setError", error: message });
+          throw new Error(message);
+        }
       },
-      register: (username, email, password) => {
-        registerRemote(username, email, password)
-          .then((snapshot) => dispatch({ type: "hydrate", snapshot }))
-          .catch((error) => dispatch({ type: "setError", error: error instanceof Error ? error.message : "注册失败，请稍后重试。" }));
+      register: async (username, email, password) => {
+        try {
+          const snapshot = await registerRemote(username, email, password);
+          dispatch({ type: "hydrate", snapshot });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "注册失败，请稍后重试。";
+          dispatch({ type: "setError", error: message });
+          throw new Error(message);
+        }
       },
       logout: () => {
         void logoutRemote().finally(() => dispatch({ type: "logout" }));
