@@ -34,6 +34,14 @@ function App() {
   const canAccessAdminPanel = currentUser?.role === "admin" && currentUser.canAccessAdminPanel !== false;
 
   const availableNavItems = navItems.filter((item) => canEditCurrentWorkspace || (item.key !== "upload" && item.key !== "outputs"));
+  const visualClassByPage: Record<PageKey, string> = {
+    dashboard: "visual-dashboard",
+    upload: "visual-workbench",
+    graph: "visual-graph",
+    assistant: "visual-copilot",
+    outputs: "visual-workbench",
+    settings: "visual-admin",
+  };
 
   const currentPage = useMemo(() => {
     switch (page) {
@@ -59,7 +67,7 @@ function App() {
 
   return (
     <main
-      className="relative min-h-screen w-full max-w-full overflow-x-hidden bg-[var(--page-bg)] text-[var(--text-secondary)]"
+      className={cn("app-viewport relative min-h-screen w-full max-w-full overflow-x-hidden bg-[var(--page-bg)] text-[var(--text-secondary)]", visualClassByPage[page])}
       style={{ "--mx": `${pointer.x}%`, "--my": `${pointer.y}%` } as CSSProperties}
       onPointerMove={(event) => {
         setPointer({

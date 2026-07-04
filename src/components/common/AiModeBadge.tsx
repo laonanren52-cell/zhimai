@@ -29,7 +29,7 @@ export default function AiModeBadge({ compact = false }: AiModeBadgeProps) {
 
   return (
     <div
-      className={`ai-mode-glass inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-[11px] shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] backdrop-blur-xl ${toneClass[status.tone]}`}
+      className={`ai-mode-glass inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-[11px] shadow-glass-inset backdrop-blur-xl ${toneClass[status.tone]}`}
       title={title}
     >
       <Icon className="h-3.5 w-3.5 shrink-0" />

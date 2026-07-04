@@ -23,7 +23,7 @@ export default function WorkspaceSelect({ onEnter }: WorkspaceSelectProps) {
   }
 
   return (
-    <main className="thin-scrollbar relative min-h-screen overflow-x-hidden bg-[var(--page-bg)] px-4 py-8 text-[var(--text-secondary)]">
+    <main className="visual-workspace thin-scrollbar relative min-h-screen overflow-x-hidden bg-[var(--page-bg)] px-4 py-8 text-[var(--text-secondary)]">
       <div className="cosmic-backdrop" />
       <div className="aurora-layer" />
       <div className="noise-layer" />

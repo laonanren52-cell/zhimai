@@ -95,14 +95,14 @@ export default function AnalysisResultCard({ result, file, parsed, onOpenGraph, 
             <p className="text-sm text-[var(--text-muted)]">正文预览</p>
             <span className="status-pill text-xs">{parsing.status === "moderate_anomaly" ? "低可信度" : "轻微异常"}</span>
           </div>
-          <pre className="mt-4 max-h-56 overflow-auto whitespace-pre-wrap rounded-2xl border border-[var(--border-subtle)] bg-[rgba(3,8,18,0.45)] p-4 text-sm leading-7 text-[var(--text-secondary)]">
+          <pre className="mt-4 max-h-56 overflow-auto whitespace-pre-wrap rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-deep)] p-4 text-sm leading-7 text-[var(--text-secondary)]">
             {parsing.preview}
           </pre>
         </div>
       )}
 
       <div className="mt-6 grid gap-5 lg:grid-cols-[1fr_0.85fr]">
-        <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-deep)] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
+        <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-deep)] p-5 shadow-glass-inset">
           <p className="text-sm text-[var(--text-muted)]">关键词</p>
           <div className="mt-4 flex flex-wrap gap-2">
             {result.keywords.length > 0 ? (
@@ -116,7 +116,7 @@ export default function AnalysisResultCard({ result, file, parsed, onOpenGraph, 
             )}
           </div>
         </div>
-        <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-deep)] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
+        <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-deep)] p-5 shadow-glass-inset">
           <p className="flex items-center gap-2 text-sm text-[var(--text-muted)]">
             <FileStack className="h-4 w-4 text-[var(--accent)]" />
             可生成成果

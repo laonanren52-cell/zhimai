@@ -154,7 +154,7 @@ export default function OutputGenerator() {
           </div>
         ) : (
           <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
-            <article className="min-h-[430px] rounded-3xl border border-[var(--border-subtle)] bg-[var(--surface-deep)] p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
+            <article className="min-h-[430px] rounded-3xl border border-[var(--border-subtle)] bg-[var(--surface-deep)] p-6 shadow-glass-inset">
               <p className="whitespace-pre-wrap text-base leading-8 text-[var(--text-primary)]">{output.body}</p>
             </article>
             <aside className="space-y-3">

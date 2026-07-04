@@ -21,7 +21,7 @@ interface AuthVisualShellProps {
 
 export function AuthVisualShell({ kicker, title, subtitle, features, children }: AuthVisualShellProps) {
   return (
-    <main className="auth-page auth-liquid-page thin-scrollbar relative min-h-screen overflow-hidden bg-[var(--page-bg)] px-4 py-6 text-[var(--text-secondary)] md:px-8">
+    <main className="visual-auth auth-page auth-liquid-page thin-scrollbar relative min-h-screen overflow-hidden bg-[var(--page-bg)] px-4 py-6 text-[var(--text-secondary)] md:px-8">
       <LiquidAuroraBackground showCursor />
       <section className="auth-liquid-shell relative z-10 mx-auto grid min-h-[calc(100vh-3rem)] max-w-7xl gap-8 lg:grid-cols-[minmax(0,1.05fr)_minmax(390px,460px)] lg:items-center">
         <div className="auth-copy fade-in">

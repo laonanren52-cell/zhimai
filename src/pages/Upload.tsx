@@ -417,7 +417,7 @@ function QualityReviewPanel({
           <p className="text-sm text-[var(--text-muted)]">正文预览</p>
           <span className="status-pill text-xs">前 {Math.min(1000, diagnostics.preview.length)} 字</span>
         </div>
-        <pre className="mt-4 max-h-64 overflow-auto whitespace-pre-wrap rounded-2xl border border-[var(--border-subtle)] bg-[rgba(3,8,18,0.45)] p-4 text-sm leading-7 text-[var(--text-secondary)]">
+        <pre className="mt-4 max-h-64 overflow-auto whitespace-pre-wrap rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-deep)] p-4 text-sm leading-7 text-[var(--text-secondary)]">
           {diagnostics.preview || "没有可显示的正文预览。"}
         </pre>
       </div>

@@ -71,7 +71,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
             <WorkspaceBadge />
             <AiModeBadge compact />
           </div>
-          <p className="liquid-action mt-5 inline-flex max-w-full flex-wrap items-center gap-2 rounded-full border border-[var(--border-subtle)] bg-[var(--surface-soft)] px-4 py-3 text-sm text-[var(--text-secondary)] shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
+          <p className="liquid-action mt-5 inline-flex max-w-full flex-wrap items-center gap-2 rounded-full border border-[var(--border-subtle)] bg-[var(--surface-soft)] px-4 py-3 text-sm text-[var(--text-secondary)] shadow-glass-inset">
             把你的
             <span className="inline-flex min-w-[4.2em] justify-center rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-1 font-semibold text-[var(--accent)]">
               {dynamicWords[wordIndex]}

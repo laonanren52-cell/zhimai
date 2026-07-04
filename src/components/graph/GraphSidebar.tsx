@@ -101,7 +101,7 @@ export default function GraphSidebar({
           </p>
         )}
         {search.trim() && searchResults.length > 0 && (
-          <div className="thin-scrollbar mt-2 max-h-40 space-y-2 overflow-y-auto rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-deep)] p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
+          <div className="thin-scrollbar mt-2 max-h-40 space-y-2 overflow-y-auto rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-deep)] p-2 shadow-glass-inset">
             {searchResults.map((result) => (
               <button key={result.node.id} type="button" onClick={() => onSelectSearchResult(result.node.id)} className="w-full rounded-xl px-3 py-2 text-left transition hover:bg-[var(--surface-hover)]">
                 <span className="flex items-center justify-between gap-2">

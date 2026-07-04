@@ -85,6 +85,8 @@ interface KnowledgeGraphProps {
 
 function colorWithAlpha(hex: string, alpha: number) {
   const resolved = resolveCssColor(hex);
+  if (resolved.startsWith("rgb(")) return resolved.replace("rgb(", "rgba(").replace(")", `, ${alpha})`);
+  if (resolved.startsWith("rgba(")) return resolved.replace(/,\s*[\d.]+\)$/, `, ${alpha})`);
   if (!resolved.startsWith("#")) return resolved;
   const normalized = resolved.replace("#", "");
   const r = parseInt(normalized.slice(0, 2), 16);
@@ -125,7 +127,7 @@ function toVisNode(
   const opacity = visual.opacity ?? (dimmed ? 0.26 : 0.92);
   const shadowScale = visual.shadowScale ?? 1;
   const labelVisible = selected;
-  const background = dimmed ? `rgba(86, 96, 120, ${opacity})` : colorWithAlpha(nodeColor, opacity);
+  const background = dimmed ? colorWithAlpha("var(--text-faint)", opacity) : colorWithAlpha(nodeColor, opacity);
   const sizeDelta = visual.sizeDelta ?? 0;
 
   return {
@@ -143,7 +145,7 @@ function toVisNode(
       hover: { background: nodeColor, border: resolveCssColor("var(--text-primary)") },
     },
     font: {
-      color: labelVisible ? resolveCssColor("var(--text-primary)") : "rgba(226,232,240,0)",
+      color: labelVisible ? resolveCssColor("var(--text-primary)") : colorWithAlpha("var(--text-primary)", 0),
       size: labelVisible ? 18 : 0,
       face: "Geist, ui-sans-serif",
       strokeWidth: labelVisible ? 5 : 0,
@@ -166,6 +168,7 @@ function toVisEdge(
   opacityScale = 1,
 ): VisEdgeItem {
   const baseAlpha = highlighted ? 0.88 : dimmed ? 0.14 : 0.34;
+  const edgeColor = highlighted ? "var(--accent)" : dimmed ? "var(--text-faint)" : "var(--text-muted)";
   return {
     id: edge.id,
     from: edge.from,
@@ -173,13 +176,9 @@ function toVisEdge(
     label: undefined,
     width: highlighted ? 1.5 : dimmed ? 0.18 : Math.max(0.45, edge.weight ?? 0.55),
     color: {
-      color: highlighted
-        ? `rgba(196, 232, 255, ${baseAlpha * opacityScale})`
-        : dimmed
-          ? `rgba(70, 80, 105, ${baseAlpha * opacityScale})`
-          : `rgba(136, 164, 205, ${baseAlpha * opacityScale})`,
-      highlight: "rgba(210, 242, 255, 0.95)",
-      hover: "rgba(210, 242, 255, 0.9)",
+      color: colorWithAlpha(edgeColor, baseAlpha * opacityScale),
+      highlight: colorWithAlpha("var(--accent)", 0.95),
+      hover: colorWithAlpha("var(--accent)", 0.9),
       opacity: Math.min(1, baseAlpha * opacityScale),
     },
     smooth: { enabled: true, type: "continuous", roundness: 0.28 },
@@ -402,7 +401,7 @@ export default function KnowledgeGraph({
     ensureStarParticles(width, height);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = "rgba(5, 7, 13, 0.18)";
+    ctx.fillStyle = colorWithAlpha("var(--page-bg)", 0.18);
     ctx.fillRect(0, 0, width, height);
 
     const particles = starParticlesRef.current;
@@ -411,13 +410,13 @@ export default function KnowledgeGraph({
       particle.y = (particle.y + particle.vy * 16 + height) % height;
       const pulse = 0.65 + Math.sin(now / 1800 + particle.phase) * 0.35;
       ctx.beginPath();
-      ctx.fillStyle = `rgba(176, 218, 255, ${particle.alpha * pulse})`;
+      ctx.fillStyle = colorWithAlpha("var(--text-secondary)", particle.alpha * pulse);
       ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
       ctx.fill();
 
       if (index % 9 === 0) {
         ctx.beginPath();
-        ctx.fillStyle = `rgba(103, 232, 249, ${0.035 * pulse})`;
+        ctx.fillStyle = colorWithAlpha("var(--accent-strong)", 0.035 * pulse);
         ctx.arc(particle.x, particle.y, particle.size * 4.5, 0, Math.PI * 2);
         ctx.fill();
       }
@@ -466,15 +465,15 @@ export default function KnowledgeGraph({
         const phase = (now / 1450 + index * 0.11) % 1;
         const particleX = from.x + (to.x - from.x) * phase;
         const particleY = from.y + (to.y - from.y) * phase;
-        ctx.strokeStyle = "rgba(174, 225, 255, 0.14)";
+        ctx.strokeStyle = colorWithAlpha("var(--accent)", 0.14);
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(from.x, from.y);
         ctx.lineTo(to.x, to.y);
         ctx.stroke();
         const glow = ctx.createRadialGradient(particleX, particleY, 0, particleX, particleY, 12);
-        glow.addColorStop(0, "rgba(210, 242, 255, 0.52)");
-        glow.addColorStop(1, "rgba(103, 232, 249, 0)");
+        glow.addColorStop(0, colorWithAlpha("var(--accent)", 0.52));
+        glow.addColorStop(1, colorWithAlpha("var(--accent-strong)", 0));
         ctx.fillStyle = glow;
         ctx.beginPath();
         ctx.arc(particleX, particleY, 12, 0, Math.PI * 2);
@@ -492,7 +491,7 @@ export default function KnowledgeGraph({
       if (!position) return;
       const radius = 14 + progress * 46;
       const alpha = (1 - progress) * 0.42;
-      ctx.strokeStyle = `rgba(103, 232, 249, ${alpha})`;
+      ctx.strokeStyle = colorWithAlpha("var(--accent-strong)", alpha);
       ctx.lineWidth = 1.4;
       ctx.beginPath();
       ctx.arc(position.x, position.y, radius, 0, Math.PI * 2);
