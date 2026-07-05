@@ -4,6 +4,7 @@ import AmbientVisualLayer from "../components/common/AmbientVisualLayer";
 import { roleLabel } from "../services/authService";
 import { useAuthStore } from "../store/authStore";
 import { ADMIN_PUBLIC_WORKSPACE_ID, privateWorkspaceId, type Workspace } from "../types/workspace";
+import { formatShanghaiDateTime } from "../utils/time";
 
 interface WorkspaceSelectProps {
   onEnter: () => void;
@@ -45,7 +46,7 @@ export default function WorkspaceSelect({ onEnter }: WorkspaceSelectProps) {
             title="管理员共享星图"
             badge="共享只读"
             detail="查看管理员维护的知识星图，可浏览资料、搜索节点、向 Copilot 提问，但不能修改共享内容。"
-            meta={adminWorkspace ? `版本 v${adminWorkspace.version} · ${adminWorkspace.lastPublishedAt?.slice(0, 10) ?? "未发布"}` : "未初始化"}
+            meta={adminWorkspace ? `版本 v${adminWorkspace.version} · ${formatShanghaiDateTime(adminWorkspace.lastPublishedAt)}` : "未初始化"}
             button="进入共享星图"
             onClick={() => enter(adminWorkspace)}
           />

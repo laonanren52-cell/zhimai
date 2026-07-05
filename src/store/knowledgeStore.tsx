@@ -172,10 +172,6 @@ function fileKind(fileName: string): KnowledgeDocument["kind"] {
   return "unknown";
 }
 
-function formatDate(date = new Date()) {
-  return date.toISOString().slice(0, 10);
-}
-
 function uniqueById<T extends { id: string }>(items: T[]) {
   const map = new Map<string, T>();
   items.forEach((item) => map.set(item.id, item));
@@ -304,7 +300,7 @@ function makeDocumentFromAnalysis(file: File, content: string, analysis: Analysi
     title: file.name,
     kind: parsed?.kind ?? fileKind(file.name),
     sizeLabel: sizeLabel(file.size),
-    uploadedAt: formatDate(),
+    uploadedAt: nowIso(),
     summary: analysis.summary,
     keywords: analysis.keywords,
     sourceText: diagnostics.canAnswer ? content.slice(0, 12_000) : "",

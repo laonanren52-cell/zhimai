@@ -31,6 +31,12 @@ http://0.0.0.0:3001
 HOST=0.0.0.0 API_HOST=0.0.0.0 PORT=3001 node server/index.mjs
 ```
 
+生产服务器推荐设置为中国时区，便于系统日志和运维排查与前端显示一致：
+
+```bash
+sudo timedatectl set-timezone Asia/Shanghai
+```
+
 前端另开一个终端启动：
 
 ```bash

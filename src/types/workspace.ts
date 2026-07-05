@@ -49,6 +49,7 @@ export interface SystemAuditLog {
   actorName?: string;
   detail: string;
   createdAt: string;
+  loginAt?: string;
   ip?: string;
 }
 

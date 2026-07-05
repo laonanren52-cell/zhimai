@@ -1,6 +1,7 @@
 import { ExternalLink, FileText, Link2 } from "lucide-react";
 import type { WebSourceReference } from "../../types/ai";
 import type { SourceReference } from "../../types/graph";
+import { formatShanghaiDateTime } from "../../utils/time";
 
 interface SourceCardProps {
   source?: SourceReference;
@@ -21,7 +22,7 @@ export default function SourceCard({ source, webSource, onOpenNode }: SourceCard
               {webSource.title}
             </a>
             <p className="mt-1 text-xs text-[var(--text-faint)]">
-              {webSource.siteName} · {new Date(webSource.retrievedAt).toLocaleString()}
+              {webSource.siteName} · {formatShanghaiDateTime(webSource.retrievedAt)}
             </p>
             <p className="mt-2 text-xs leading-6 text-[var(--text-muted)]">{webSource.snippet}</p>
             <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">

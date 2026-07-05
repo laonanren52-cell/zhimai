@@ -8,6 +8,7 @@ import { useAiStatus } from "../store/aiStatusStore";
 import { useAuthStore } from "../store/authStore";
 import { useKnowledgeStore } from "../store/knowledgeStore";
 import { getGraphCounts } from "../utils/graphUtils";
+import { formatShanghaiDateTime } from "../utils/time";
 
 type Destination = "dashboard" | "upload" | "graph" | "assistant" | "outputs";
 
@@ -179,7 +180,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                 <button key={document.id} type="button" onClick={() => onNavigate("graph")} className="group micro-card hover-lift w-full p-4 text-left">
                   <div className="flex items-center justify-between gap-4">
                     <span className="truncate text-sm font-medium text-[var(--text-primary)]">{document.title}</span>
-                    <span className="shrink-0 text-xs text-[var(--text-faint)]">{document.uploadedAt}</span>
+                    <span className="shrink-0 text-xs text-[var(--text-faint)]">{formatShanghaiDateTime(document.uploadedAt)}</span>
                   </div>
                   <p className="mt-2 line-clamp-2 text-xs leading-6 text-[var(--text-faint)]">{document.canAnswer ? document.summary : document.parseMessage}</p>
                 </button>

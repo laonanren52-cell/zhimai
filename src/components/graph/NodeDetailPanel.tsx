@@ -6,6 +6,7 @@ import type { GeneratedOutput } from "../../types/ai";
 import type { KnowledgeDocument } from "../../types/document";
 import type { GraphEdge, GraphNode } from "../../types/graph";
 import type { AIRecommendation } from "../../store/knowledgeStore";
+import { formatShanghaiDateTime } from "../../utils/time";
 
 type NodeIntent = "ask" | "summary" | "generate" | "analyze" | "web";
 
@@ -91,7 +92,7 @@ export default function NodeDetailPanel({
                 {outputs.slice(0, 5).map((output) => (
                   <div key={output.id} className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-soft)] p-3">
                     <p className="truncate text-sm font-medium text-[var(--text-primary)]">{output.title}</p>
-                    <p className="mt-1 text-xs text-[var(--text-faint)]">{output.createdAt.slice(0, 10)}</p>
+                    <p className="mt-1 text-xs text-[var(--text-faint)]">{formatShanghaiDateTime(output.createdAt)}</p>
                   </div>
                 ))}
               </div>

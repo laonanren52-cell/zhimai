@@ -23,6 +23,7 @@ import { roleLabel, workspaceTypeLabel } from "../services/authService";
 import { useAiStatus } from "../store/aiStatusStore";
 import { useAuthStore } from "../store/authStore";
 import { useKnowledgeStore } from "../store/knowledgeStore";
+import { formatShanghaiDateTime } from "../utils/time";
 
 export default function AdminSettings() {
   const {
@@ -177,7 +178,7 @@ export default function AdminSettings() {
                         </div>
                         <p className="mt-2 truncate text-sm text-[var(--text-muted)]">{user.email}</p>
                         <p className="mt-2 text-xs text-[var(--text-faint)]">
-                          注册 {formatDate(user.createdAt)} · 最近活跃 {formatDate(user.lastActiveAt)} · 最近 IP {user.lastLoginIp ?? user.lastIp ?? "local-session"}
+                          注册 {formatShanghaiDateTime(user.createdAt)} · 最近活跃 {formatShanghaiDateTime(user.lastActiveAt)} · 最近 IP {user.lastLoginIp ?? user.lastIp ?? "local-session"}
                         </p>
                         <p className="mt-1 text-xs text-[var(--text-faint)]">
                           共享星图：可访问 · 个人星图：{privateWorkspace ? "已创建" : "未创建"} · 登录 {user.loginCount ?? 0} 次
@@ -273,7 +274,7 @@ export default function AdminSettings() {
                 <div key={user.id} className="micro-card p-4">
                   <p className="text-sm font-semibold text-[var(--text-primary)]">{user.username}</p>
                   <p className="mt-2 text-xs text-[var(--text-faint)]">最近 IP：{user.lastLoginIp ?? user.lastIp ?? "local-session"}</p>
-                  <p className="mt-1 text-xs text-[var(--text-faint)]">最近活跃：{formatDate(user.lastActiveAt)}</p>
+                  <p className="mt-1 text-xs text-[var(--text-faint)]">最近活跃：{formatShanghaiDateTime(user.lastActiveAt)}</p>
                   <p className="mt-1 text-xs text-[var(--text-faint)]">最近页面：{user.role === "admin" ? "管理后台" : "知识工作台"}</p>
                 </div>
               ))
@@ -293,7 +294,7 @@ export default function AdminSettings() {
               <div key={log.id} className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-soft)] px-4 py-3">
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-sm font-medium text-[var(--text-primary)]">{log.detail}</span>
-                  <span className="shrink-0 text-xs text-[var(--text-faint)]">{formatDate(log.createdAt)}</span>
+                  <span className="shrink-0 text-xs text-[var(--text-faint)]">{formatShanghaiDateTime(("loginAt" in log ? log.loginAt : undefined) ?? log.createdAt)}</span>
                 </div>
                 <p className="mt-1 text-xs text-[var(--text-faint)]">{log.actorName ?? "system"} · {log.type}</p>
               </div>
@@ -316,9 +317,4 @@ function AdminMetric({ icon, label, value, detail }: { icon: ReactNode; label: s
       <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--text-faint)]">{detail}</p>
     </div>
   );
-}
-
-function formatDate(value?: string) {
-  if (!value) return "暂无";
-  return value.replace("T", " ").slice(0, 16);
 }

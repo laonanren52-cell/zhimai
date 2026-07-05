@@ -5,6 +5,7 @@ import type { GraphMode } from "../../services/graphService";
 import type { KnowledgeDocument } from "../../types/document";
 import type { GraphNodeType } from "../../types/graph";
 import { cn } from "../../utils/cn";
+import { formatShanghaiDateTime } from "../../utils/time";
 import type { GraphSearchResult } from "../../utils/graphUtils";
 
 const nodeTypes: GraphNodeType[] = ["project", "document", "tech", "problem", "output", "tag", "concept"];
@@ -208,7 +209,7 @@ export default function GraphSidebar({
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium text-[var(--text-primary)]">{document.title}</p>
-                      <p className="mt-1 text-xs text-[var(--text-faint)]">{document.uploadedAt} · {document.sizeLabel}</p>
+                      <p className="mt-1 text-xs text-[var(--text-faint)]">{formatShanghaiDateTime(document.uploadedAt)} · {document.sizeLabel}</p>
                       <p className="mt-1 text-xs text-[var(--text-faint)]">{document.canAnswer ? `${document.chunks.length} 个片段` : document.parseStatus}</p>
                       {document.analysisSourceStatus === "mock" && <p className="mt-1 text-xs text-[var(--warning)]">历史 mock 数据</p>}
                     </div>

@@ -11,6 +11,7 @@ import { useKnowledgeStore } from "../store/knowledgeStore";
 import type { KnowledgeDocument, ParsedDocument } from "../types/document";
 import type { GraphNode, GraphNodeType, SourceReference } from "../types/graph";
 import { getConnectedEdges, getNeighborIds, getNodeById, searchGraphNodes } from "../utils/graphUtils";
+import { formatShanghaiDateTime } from "../utils/time";
 
 const allTypes: GraphNodeType[] = ["project", "document", "tech", "problem", "output", "tag", "concept"];
 
@@ -252,7 +253,7 @@ export default function Graph({ onOpenAssistant }: GraphProps) {
         <div className="flex flex-wrap items-center gap-2">
           {currentWorkspace?.type === "admin_public" && (
             <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--surface-soft)] px-4 py-2 text-xs text-[var(--text-muted)]">
-              v{currentWorkspace.version} · 最近发布 {currentWorkspace.lastPublishedAt?.slice(0, 10) ?? "未发布"} · {currentWorkspace.updateSummary ?? "暂无更新说明"}
+              v{currentWorkspace.version} · 最近发布 {formatShanghaiDateTime(currentWorkspace.lastPublishedAt)} · {currentWorkspace.updateSummary ?? "暂无更新说明"}
             </span>
           )}
           {canEditCurrentWorkspace && currentWorkspace?.type === "admin_public" ? (
