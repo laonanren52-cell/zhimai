@@ -3,8 +3,7 @@ import type { KnowledgeDocument } from "../types/document";
 import type { GraphData } from "../types/graph";
 import type { SystemAuditLog, SystemMetrics, SystemSettings, Workspace, ZhimaiUser } from "../types/workspace";
 import type { RecentActivity } from "../store/knowledgeStore";
-
-const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3001").replace(/\/$/, "");
+import { apiClient, ApiClientError } from "./apiClient";
 
 export const SESSION_TOKEN_KEY = "zhimai-ai-session-token";
 export const LAST_WORKSPACE_KEY = "zhimai-ai-last-workspace";
@@ -59,31 +58,12 @@ export function setLastWorkspaceId(workspaceId?: string | null) {
 }
 
 async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const token = getSessionToken();
-  let response: Response;
   try {
-    response = await fetch(`${apiBaseUrl}${path}`, {
-      ...options,
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(options.headers ?? {}),
-      },
-    });
-  } catch {
-    throw new Error("网络异常，请确认后端服务已启动或 API 地址配置正确。");
+    return apiClient<T>(path, options);
+  } catch (error) {
+    if (error instanceof ApiClientError) throw error;
+    throw new Error(error instanceof Error ? error.message : "后端数据服务请求失败。");
   }
-  const text = await response.text();
-  let payload: Record<string, unknown> = {};
-  try {
-    payload = text ? (JSON.parse(text) as Record<string, unknown>) : {};
-  } catch {
-    payload = { error: text || "后端返回了无法解析的响应。" };
-  }
-  if (!response.ok) {
-    throw new Error(typeof payload.error === "string" ? payload.error : `后端数据服务请求失败：${response.status}`);
-  }
-  return payload as T;
 }
 
 export async function loginRemote(username: string, password: string) {

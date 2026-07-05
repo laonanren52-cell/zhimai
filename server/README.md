@@ -19,10 +19,16 @@ cd C:\Users\cheng\Documents\Codex\2026-07-02\files-mentioned-by-the-user-ai
 npm run dev:api
 ```
 
-默认监听：
+默认监听所有网卡：
 
 ```text
-http://127.0.0.1:3001
+http://0.0.0.0:3001
+```
+
+生产环境可显式指定监听地址和端口：
+
+```bash
+HOST=0.0.0.0 API_HOST=0.0.0.0 PORT=3001 node server/index.mjs
 ```
 
 前端另开一个终端启动：
@@ -37,7 +43,7 @@ npm run dev
 
 ```env
 VITE_AI_PROVIDER=api
-VITE_API_BASE_URL=http://localhost:3001
+VITE_API_BASE_URL=http://127.0.0.1:3001
 ```
 
 只做演示：

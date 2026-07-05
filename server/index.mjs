@@ -3,7 +3,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 
-const PORT = Number(process.env.PORT || process.env.API_PORT || 3001);
+loadEnvFile(".env");
+loadEnvFile(".env.local");
+
+const PORT = Number(process.env.PORT || 3001);
+const HOST = process.env.HOST || process.env.API_HOST || "0.0.0.0";
 const JSON_LIMIT_BYTES = 1024 * 1024 * 12;
 
 const relationTypes = new Set(["mentions", "belongs_to", "uses", "depends_on", "solves", "generates", "related_to"]);
@@ -59,7 +63,7 @@ function createAdminUser() {
     canEditAdminGraph: true,
     mustChangePassword: true,
     loginCount: 0,
-    ...createPasswordRecord("123456"),
+    ...createPasswordRecord("654321"),
   };
 }
 
@@ -355,9 +359,6 @@ function loadEnvFile(fileName) {
     process.env[key] = rawValue.replace(/^["']|["']$/g, "");
   }
 }
-
-loadEnvFile(".env");
-loadEnvFile(".env.local");
 
 function jsonResponse(res, status, payload) {
   const body = JSON.stringify(payload);
@@ -919,7 +920,7 @@ function safeHost(url) {
 }
 
 async function route(req, res) {
-  const url = new URL(req.url || "/", "http://127.0.0.1");
+  const url = new URL(req.url || "/", `http://${req.headers.host || "zhimai.local"}`);
   if (req.method === "OPTIONS") {
     jsonResponse(res, 204, {});
     return;
@@ -1268,10 +1269,10 @@ async function route(req, res) {
 
 createServer((req, res) => {
   void route(req, res);
-}).listen(PORT, "127.0.0.1", () => {
+}).listen(PORT, HOST, () => {
   const config = getProviderConfig();
   const search = getSearchConfig();
-  console.log(`Zhimai AI proxy listening on http://127.0.0.1:${PORT}`);
+  console.log(`Zhimai AI proxy listening on http://${HOST}:${PORT}`);
   console.log(`AI provider: ${config.provider}${config.provider === "mock" ? " (no API key detected)" : ` / ${config.model}`}`);
   console.log(`Search provider: ${search.enabled ? search.provider : "not configured"}`);
 });

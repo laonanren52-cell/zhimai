@@ -41,7 +41,7 @@ http://localhost:5173
 默认后端地址：
 
 ```text
-http://localhost:3001
+http://127.0.0.1:3001
 ```
 
 ## 账号与注册
@@ -67,8 +67,10 @@ http://localhost:3001
 
 ```env
 VITE_AI_PROVIDER=api
-VITE_API_BASE_URL=http://localhost:3001
+VITE_API_BASE_URL=https://api.example.com
 ```
+
+本地开发不配置 `VITE_API_BASE_URL` 时，前端会默认请求 `http://127.0.0.1:3001`。生产构建不配置该变量时，前端会请求相对路径 `/api`，需要由同域反向代理转发到后端。
 
 后端 `.env` 示例：
 
@@ -106,15 +108,24 @@ dist/
 - Build Command：`npm run build`
 - Output Directory：`dist`
 
-如果前端和后端分开部署，生产环境推荐使用 `/api` 反向代理到后端，避免浏览器跨域和 `localhost` 请求问题。
+EdgeOne Pages 只部署前端静态资源，不会托管 `server/index.mjs` 里的 Node 后端。后端必须单独部署到云服务器、容器或其他 Node 运行环境，并保证浏览器可以访问对应 API。
+
+生产环境有两种推荐接入方式：
+
+1. 在 EdgeOne Pages 环境变量中配置 `VITE_API_BASE_URL=https://你的后端公网域名`。
+2. 不配置 `VITE_API_BASE_URL`，让前端请求相对路径 `/api`，再用同域 Nginx、EdgeOne 规则或其他网关把 `/api` 反向代理到 Node 后端。
+
+不要在 EdgeOne Pages 生产环境把 `VITE_API_BASE_URL` 配成 `localhost` 或 `127.0.0.1`。预览链接和手机端访问时，这些地址会指向访问者自己的设备，而不是你的服务器。
 
 ## 生产部署注意事项
 
 1. 前端生产环境不要使用 `localhost` 作为 API 地址。
-2. 如果使用 Nginx，前端静态资源指向 `dist`，`/api` 代理到 Node 后端。
-3. React/Vite 单页应用需要配置 fallback 到 `index.html`，否则刷新 `/graph`、`/upload`、`/copilot` 会 404。
-4. 腾讯云安全组至少放行 80/443；后端端口建议只由 Nginx 内部代理，不直接暴露。
-5. 上传功能需要确认后端上传目录存在且有写入权限，并配置 Nginx 上传大小限制。
+2. 后端可用 `HOST=0.0.0.0 API_HOST=0.0.0.0 PORT=3001 node server/index.mjs` 启动，或交给 PM2 / systemd 守护；启动日志应显示 `http://0.0.0.0:3001`。
+3. 如果使用 Nginx，前端静态资源指向 `dist`，`/api` 代理到 Node 后端。
+4. React/Vite 单页应用需要配置 fallback 到 `index.html`，否则刷新 `/graph`、`/upload`、`/copilot` 会 404。
+5. 腾讯云安全组至少放行 80/443；后端端口建议只由 Nginx 内部代理，不直接暴露。
+6. 上传功能需要确认后端上传目录存在且有写入权限，并配置 Nginx 上传大小限制。
+7. 部署后先访问 `https://你的后端域名/api/health` 或同域 `/api/health`，确认返回健康状态后再验证注册、登录、共享星图和 AI 提问。
 
 ## 最近更新
 

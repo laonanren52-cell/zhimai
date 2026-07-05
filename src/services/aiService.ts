@@ -1,11 +1,11 @@
 import { mockDocuments } from "../data/mockDocuments";
 import { getAuthHeaders } from "./authService";
+import { apiClient, getApiBaseUrl } from "./apiClient";
 import type { AnswerMode, GeneratedOutput, GeneratedOutputType, QAResult, WebSourceReference } from "../types/ai";
 import type { KnowledgeDocument, ParsedDocument } from "../types/document";
 import type { AnalysisResult, GraphData, GraphEdge, GraphNode, GraphNodeType, SourceReference } from "../types/graph";
 
 const provider = import.meta.env.VITE_AI_PROVIDER ?? "mock";
-const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3001").replace(/\/$/, "");
 
 export type ClientAiProvider = "mock" | "api" | "deepseek" | "openai" | "local" | string;
 
@@ -44,13 +44,11 @@ type TopicPreset = {
 };
 
 export function getClientAiConfig() {
-  return { provider: provider as ClientAiProvider, apiBaseUrl, isMockMode: provider === "mock" };
+  return { provider: provider as ClientAiProvider, apiBaseUrl: getApiBaseUrl(), isMockMode: provider === "mock" };
 }
 
 export async function getBackendAiHealth(): Promise<BackendHealth> {
-  const response = await fetch(`${apiBaseUrl}/api/health`);
-  if (!response.ok) throw new Error(`AI 代理健康检查失败：${response.status}`);
-  return response.json();
+  return apiClient<BackendHealth>("/api/health");
 }
 
 function delay(ms: number) {
@@ -222,25 +220,11 @@ export function buildUnavailableAnalysis(fileName: string, parsed: ParsedDocumen
 }
 
 async function postApi<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}${path}`, {
+  return apiClient<T>(path, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    headers: getAuthHeaders(),
     body: JSON.stringify(body),
   });
-  const text = await response.text();
-  let payload: unknown = {};
-  if (text.trim()) {
-    try {
-      payload = JSON.parse(text);
-    } catch {
-      throw new Error("后端 AI 服务返回了无法解析的响应。");
-    }
-  }
-  if (!response.ok) {
-    const message = payload && typeof payload === "object" && "error" in payload ? String((payload as { error: unknown }).error) : `后端 AI 服务请求失败：${response.status}`;
-    throw new Error(message);
-  }
-  return payload as T;
 }
 
 async function callApiStrict<T>(operation: string, request: () => Promise<T>): Promise<T> {
