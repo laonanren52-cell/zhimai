@@ -83,7 +83,7 @@ export default function WorkspaceSelect({ onEnter }: WorkspaceSelectProps) {
             <div>
               <h2 className="text-lg font-semibold text-[var(--text-primary)]">空间与权限说明</h2>
               <p className="mt-2 text-sm leading-7 text-[var(--text-muted)]">
-                共享星图由管理员维护，普通用户可查看和提问；个人星图由当前用户独立管理。进入工作台后，顶部会持续显示当前角色、空间和权限状态。
+                共享星图由管理员维护，普通用户可查看和提问；个人星图由当前用户独立管理。空间、角色和权限信息可在设置中心查看。
               </p>
             </div>
           </div>

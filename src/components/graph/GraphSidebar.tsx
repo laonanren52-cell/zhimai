@@ -1,5 +1,6 @@
 import { CheckSquare, ChevronDown, FileText, Filter, LocateFixed, RefreshCw, RotateCcw, Search, SlidersHorizontal, Square, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
+import { useState } from "react";
 import { nodeTypeMeta } from "../../data/mockGraphData";
 import type { GraphMode } from "../../services/graphService";
 import type { KnowledgeDocument } from "../../types/document";
@@ -14,6 +15,17 @@ const modes: Array<{ key: GraphMode; label: string; detail: string }> = [
   { key: "global", label: "全局星图", detail: "展示全部资料星团" },
   { key: "project", label: "当前项目星图", detail: "聚焦项目所在星团" },
   { key: "local", label: "当前节点局部图谱", detail: "只看一阶邻居" },
+];
+
+type ControlPanelKey = "filter" | "mode" | "recent" | "stats" | "reset" | "danger";
+
+const controlPanels: Array<{ key: ControlPanelKey; label: string }> = [
+  { key: "filter", label: "节点筛选" },
+  { key: "mode", label: "星图模式" },
+  { key: "recent", label: "最近上传" },
+  { key: "stats", label: "星图统计" },
+  { key: "reset", label: "重置视图" },
+  { key: "danger", label: "清空星图" },
 ];
 
 interface GraphSidebarProps {
@@ -67,6 +79,8 @@ export default function GraphSidebar({
   onDeleteDocument,
   onReanalyzeDocument,
 }: GraphSidebarProps) {
+  const [activePanel, setActivePanel] = useState<ControlPanelKey>("filter");
+
   return (
     <aside className="knowledge-graph-frame graph-side-panel lux-card workbench-panel min-w-0 flex-col rounded-3xl p-4">
       <div className="graph-panel-header">
@@ -120,8 +134,27 @@ export default function GraphSidebar({
         )}
       </div>
 
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        {controlPanels.map((panel) => (
+          <button
+            key={panel.key}
+            type="button"
+            onClick={() => setActivePanel(panel.key)}
+            className={cn(
+              "liquid-action rounded-2xl border px-3 py-2 text-xs transition",
+              activePanel === panel.key
+                ? "border-[var(--accent-border)] bg-[var(--accent-soft)] text-[var(--accent)]"
+                : "border-[var(--border-subtle)] bg-[var(--surface-soft)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]",
+            )}
+          >
+            {panel.label}
+          </button>
+        ))}
+      </div>
+
       <div className="graph-panel-scroll thin-scrollbar mt-4">
-        <GraphPanelSection title="节点类型筛选" icon={<Filter className="h-4 w-4 text-[var(--accent)]" />} defaultOpen>
+        {activePanel === "filter" && (
+        <GraphPanelSection title="节点筛选" icon={<Filter className="h-4 w-4 text-[var(--accent)]" />} defaultOpen>
           <div className="mb-3 grid grid-cols-3 gap-2">
             <button type="button" onClick={onSelectAllTypes} className="micro-card hover-lift inline-flex items-center justify-center gap-1 px-2 py-2 text-xs text-[var(--text-secondary)]">
               <CheckSquare className="h-3.5 w-3.5" />
@@ -177,7 +210,9 @@ export default function GraphSidebar({
             ))}
           </div>
         </GraphPanelSection>
+        )}
 
+        {activePanel === "mode" && (
         <GraphPanelSection title="星图模式" icon={<LocateFixed className="h-4 w-4 text-[var(--accent)]" />} defaultOpen>
           <div className="space-y-2">
             {modes.map((item) => (
@@ -196,8 +231,10 @@ export default function GraphSidebar({
             ))}
           </div>
         </GraphPanelSection>
+        )}
 
-        <GraphPanelSection title="最近上传资料" icon={<FileText className="h-4 w-4 text-[var(--accent)]" />} defaultOpen={false}>
+        {activePanel === "recent" && (
+        <GraphPanelSection title="最近上传资料" icon={<FileText className="h-4 w-4 text-[var(--accent)]" />} defaultOpen>
           {documents.length === 0 ? (
             <p className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-soft)] p-3 text-xs leading-6 text-[var(--text-faint)]">
               暂无入库资料。上传第一份资料后，星图会自动生成文档节点和知识关系。
@@ -239,15 +276,10 @@ export default function GraphSidebar({
             </div>
           )}
         </GraphPanelSection>
-      </div>
+        )}
 
-      <div className="graph-panel-footer">
-        <details className="graph-section">
-          <summary>
-            <span className="text-sm text-[var(--text-muted)]">星图统计</span>
-            <ChevronDown className="graph-section-chevron h-4 w-4" />
-          </summary>
-          <div className="graph-section-body">
+        {activePanel === "stats" && (
+        <GraphPanelSection title="星图统计" icon={<SlidersHorizontal className="h-4 w-4 text-[var(--accent)]" />} defaultOpen>
             <div className="grid grid-cols-2 gap-2">
               <div className="rounded-2xl bg-[var(--surface-soft)] p-2.5">
                 <p className="text-xs text-[var(--text-faint)]">节点数</p>
@@ -262,17 +294,31 @@ export default function GraphSidebar({
               <p className="text-xs text-[var(--text-faint)]">当前高亮节点</p>
               <p className="mt-1 truncate text-sm text-[var(--text-secondary)]">{stats.highlightedLabel || "尚未选择"}</p>
             </div>
-          </div>
-        </details>
-        <button type="button" onClick={onReset} className="btn-secondary mt-3 flex w-full py-2.5">
+        </GraphPanelSection>
+        )}
+
+        {activePanel === "reset" && (
+        <GraphPanelSection title="重置视图" icon={<RotateCcw className="h-4 w-4 text-[var(--accent)]" />} defaultOpen>
+          <p className="mb-3 text-sm leading-7 text-[var(--text-muted)]">恢复全局星图、全部节点类型和默认搜索状态，不会删除任何资料或节点。</p>
+          <button type="button" onClick={onReset} className="btn-secondary flex w-full py-2.5">
           <RotateCcw className="h-4 w-4" />
           重置视图
         </button>
-        {canEdit && (
+        </GraphPanelSection>
+        )}
+
+        {activePanel === "danger" && (
+        <GraphPanelSection title="清空星图" icon={<Trash2 className="h-4 w-4 text-[var(--danger)]" />} defaultOpen>
+          <p className="mb-3 text-sm leading-7 text-[var(--text-muted)]">清空会删除当前空间资料、节点、关系和成果记录。只在确认要重建星图时使用。</p>
+          {canEdit ? (
           <button type="button" onClick={onClearGraph} className="mt-2 flex w-full items-center justify-center gap-2 rounded-full border border-[var(--danger-border)] bg-[var(--danger-bg)] px-4 py-2.5 text-sm font-semibold text-[var(--danger)] transition hover:-translate-y-0.5 hover:border-[var(--danger-border)]">
             <Trash2 className="h-4 w-4" />
             清空知识星图
           </button>
+          ) : (
+            <p className="rounded-2xl border border-[var(--warning-border)] bg-[var(--warning-bg)] px-3 py-2.5 text-xs leading-5 text-[var(--warning)]">只读空间不能清空管理员共享星图。</p>
+          )}
+        </GraphPanelSection>
         )}
       </div>
     </aside>

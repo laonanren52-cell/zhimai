@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { DataSet } from "vis-data/peer/esm/vis-data";
 import { Network } from "vis-network/standalone/esm/vis-network";
 import "vis-network/styles/vis-network.css";
@@ -81,6 +81,7 @@ interface KnowledgeGraphProps {
   onSelectNode: (node: GraphNode | null) => void;
   onSearchMiss: (query: string) => void;
   onSwitchLocal: (nodeId: string) => void;
+  onDeleteNode?: (node: GraphNode) => void;
 }
 
 function colorWithAlpha(hex: string, alpha: number) {
@@ -126,7 +127,7 @@ function toVisNode(
   const nodeGlow = resolveCssColor(meta.glow);
   const opacity = visual.opacity ?? (dimmed ? 0.26 : 0.92);
   const shadowScale = visual.shadowScale ?? 1;
-  const labelVisible = selected;
+  const labelVisible = selected || isImportantNode(node);
   const background = dimmed ? colorWithAlpha("var(--text-faint)", opacity) : colorWithAlpha(nodeColor, opacity);
   const sizeDelta = visual.sizeDelta ?? 0;
 
@@ -194,7 +195,9 @@ export default function KnowledgeGraph({
   onSelectNode,
   onSearchMiss,
   onSwitchLocal,
+  onDeleteNode,
 }: KnowledgeGraphProps) {
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: GraphNode } | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const backgroundCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -207,6 +210,7 @@ export default function KnowledgeGraph({
   const onSelectNodeRef = useRef(onSelectNode);
   const onSearchMissRef = useRef(onSearchMiss);
   const onSwitchLocalRef = useRef(onSwitchLocal);
+  const onDeleteNodeRef = useRef(onDeleteNode);
   const firstDataSyncRef = useRef(true);
   const hoverFrameRef = useRef<number | null>(null);
   const visualFrameRef = useRef<number | null>(null);
@@ -667,6 +671,10 @@ export default function KnowledgeGraph({
   }, [onSwitchLocal]);
 
   useEffect(() => {
+    onDeleteNodeRef.current = onDeleteNode;
+  }, [onDeleteNode]);
+
+  useEffect(() => {
     if (!containerRef.current || networkRef.current) return;
 
     const initialData = graphDataRef.current;
@@ -787,6 +795,7 @@ export default function KnowledgeGraph({
     });
 
     network.on("click", (params) => {
+      setContextMenu(null);
       const id = params.nodes?.[0] ? String(params.nodes[0]) : null;
       selectedRef.current = id;
       onSelectNodeRef.current(id ? (nodeMapRef.current.get(id) ?? null) : null);
@@ -794,6 +803,21 @@ export default function KnowledgeGraph({
       if (id) {
         addRipple(id);
       }
+    });
+
+    network.on("oncontext", (params) => {
+      params.event.preventDefault();
+      const nodeId = network.getNodeAt(params.pointer.DOM);
+      if (!nodeId) {
+        setContextMenu(null);
+        return;
+      }
+      const node = nodeMapRef.current.get(String(nodeId));
+      if (!node) return;
+      selectedRef.current = node.id;
+      onSelectNodeRef.current(node);
+      paintGraph(node.id);
+      setContextMenu({ x: params.pointer.DOM.x, y: params.pointer.DOM.y, node });
     });
 
     network.on("doubleClick", (params) => {
@@ -909,6 +933,44 @@ export default function KnowledgeGraph({
       <canvas ref={backgroundCanvasRef} className="pointer-events-none absolute inset-0 z-[1]" aria-hidden="true" />
       <div ref={containerRef} className="relative z-10 h-full w-full" />
       <canvas ref={overlayCanvasRef} className="pointer-events-none absolute inset-0 z-[12]" aria-hidden="true" />
+      {contextMenu && (
+        <div
+          className="absolute z-30 w-44 rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface)] p-2 text-sm shadow-glass backdrop-blur-xl"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              onSelectNode(contextMenu.node);
+              setContextMenu(null);
+            }}
+            className="w-full rounded-xl px-3 py-2 text-left text-[var(--text-secondary)] transition hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+          >
+            查看详情
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              onSwitchLocal(contextMenu.node.id);
+              setContextMenu(null);
+            }}
+            className="w-full rounded-xl px-3 py-2 text-left text-[var(--text-secondary)] transition hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+          >
+            高亮关联
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              onDeleteNodeRef.current?.(contextMenu.node);
+              setContextMenu(null);
+            }}
+            className="w-full rounded-xl px-3 py-2 text-left text-[var(--danger)] transition hover:bg-[var(--danger-bg)]"
+          >
+            删除节点
+          </button>
+        </div>
+      )}
       {data.nodes.length === 0 && (
         <div className="scrim-soft pointer-events-none absolute inset-0 z-20 grid place-items-center px-8 text-center backdrop-blur-[1px]">
           <div className="empty-orbit max-w-lg rounded-3xl p-8">

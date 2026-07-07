@@ -2,8 +2,6 @@ import { BarChart3, Boxes, CheckCircle2, FileText, Globe2, Network, Search, Spar
 import { useEffect, useMemo, useState } from "react";
 import AIRecommendationCard from "../components/dashboard/AIRecommendationCard";
 import StatCard from "../components/dashboard/StatCard";
-import AiModeBadge from "../components/common/AiModeBadge";
-import WorkspaceBadge from "../components/common/WorkspaceBadge";
 import { useAiStatus } from "../store/aiStatusStore";
 import { useAuthStore } from "../store/authStore";
 import { useKnowledgeStore } from "../store/knowledgeStore";
@@ -57,7 +55,6 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
     <div className="page-shell fade-in">
       <section className="dashboard-hero-grid grid gap-8 lg:grid-cols-[minmax(0,1fr)_500px] lg:items-center">
         <div className="relative">
-          <p className="page-kicker">AI 个人知识图谱工作台</p>
           <h1 className="page-title">
             知脉 AI
             <span className="block text-[var(--text-secondary)]">把资料沉淀成可追溯知识星图</span>
@@ -68,10 +65,6 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
           <p className="page-subtitle">
             上传文档、项目和笔记后，系统会抽取节点、关系和来源，让问答、总结和成果生成都有依据。
           </p>
-          <div className="mt-5 flex flex-wrap gap-3">
-            <WorkspaceBadge />
-            <AiModeBadge compact />
-          </div>
           <p className="liquid-action mt-5 inline-flex max-w-full flex-wrap items-center gap-2 rounded-full border border-[var(--border-subtle)] bg-[var(--surface-soft)] px-4 py-3 text-sm text-[var(--text-secondary)] shadow-glass-inset">
             把你的
             <span className="inline-flex min-w-[4.2em] justify-center rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-1 font-semibold text-[var(--accent)]">

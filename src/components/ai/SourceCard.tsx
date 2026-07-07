@@ -7,9 +7,10 @@ interface SourceCardProps {
   source?: SourceReference;
   webSource?: WebSourceReference;
   onOpenNode?: (nodeId: string) => void;
+  onOpenSource?: () => void;
 }
 
-export default function SourceCard({ source, webSource, onOpenNode }: SourceCardProps) {
+export default function SourceCard({ source, webSource, onOpenNode, onOpenSource }: SourceCardProps) {
   if (webSource) {
     return (
       <article className="micro-card source-card hover-lift rounded-3xl p-4">
@@ -26,6 +27,11 @@ export default function SourceCard({ source, webSource, onOpenNode }: SourceCard
             </p>
             <p className="mt-2 text-xs leading-6 text-[var(--text-muted)]">{webSource.snippet}</p>
             <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+              {onOpenSource && (
+                <button type="button" onClick={onOpenSource} className="rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-2 py-1 text-[var(--accent)]">
+                  查看片段
+                </button>
+              )}
               <span className="rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-2 py-1 text-[var(--accent)]">
                 相关度 {Math.round((webSource.relevance ?? 0.72) * 100)}%
               </span>
@@ -54,6 +60,11 @@ export default function SourceCard({ source, webSource, onOpenNode }: SourceCard
             {hasSnippet ? source.snippet : "当前文件尚未完成正文解析，因此无法提供片段依据。"}
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+            {onOpenSource && (
+              <button type="button" onClick={onOpenSource} className="rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-2 py-1 text-[var(--accent)]">
+                查看片段
+              </button>
+            )}
             <span className="rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-2 py-1 text-[var(--accent)]">
               可信度 {Math.round((source.score ?? 0.24) * 100)}%
             </span>

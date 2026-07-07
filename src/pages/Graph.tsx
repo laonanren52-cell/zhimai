@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import GraphSidebar from "../components/graph/GraphSidebar";
 import KnowledgeGraph from "../components/graph/KnowledgeGraph";
 import NodeDetailPanel from "../components/graph/NodeDetailPanel";
-import WorkspaceBadge from "../components/common/WorkspaceBadge";
 import { analyzeDocument } from "../services/aiService";
 import { getVisibleGraph, type GraphMode } from "../services/graphService";
 import { useAuthStore } from "../store/authStore";
@@ -11,7 +10,6 @@ import { useKnowledgeStore } from "../store/knowledgeStore";
 import type { KnowledgeDocument, ParsedDocument } from "../types/document";
 import type { GraphNode, GraphNodeType, SourceReference } from "../types/graph";
 import { getConnectedEdges, getNeighborIds, getNodeById, searchGraphNodes } from "../utils/graphUtils";
-import { formatShanghaiDateTime } from "../utils/time";
 
 const allTypes: GraphNodeType[] = ["project", "document", "tech", "problem", "output", "tag", "concept"];
 
@@ -159,6 +157,18 @@ export default function Graph({ onOpenAssistant }: GraphProps) {
     window.setTimeout(() => setGeneratedToast(null), 2600);
   }
 
+  function handleDeleteGraphNode(node: GraphNode) {
+    if (!canEditCurrentWorkspace) {
+      window.alert("你当前只有查看权限，不能修改管理员共享星图。");
+      return;
+    }
+    if (!window.confirm(`确认删除节点「${node.label}」及相关关系边吗？`)) return;
+    deleteNode(node.id);
+    if (selectedNode?.id === node.id) setSelectedNode(null);
+    setGeneratedToast(`已删除节点「${node.label}」。`);
+    window.setTimeout(() => setGeneratedToast(null), 2600);
+  }
+
   function parsedFromDocument(document: KnowledgeDocument, text: string): ParsedDocument {
     return {
       text,
@@ -237,25 +247,15 @@ export default function Graph({ onOpenAssistant }: GraphProps) {
     <div className="mx-auto max-w-[1680px] px-3 py-6 md:px-6 md:py-8 fade-in">
       <div className="mb-6 flex flex-col justify-between gap-4 md:flex-row md:items-end">
         <div>
-          <p className="page-kicker">Obsidian Global Graph · 个人知识宇宙</p>
           <h1 className="page-title-compact">知脉星图</h1>
           <p className="page-subtitle">
             把资料、项目、问题、技术点和成果组织为可追溯的个人知识星图。点击节点只更新高亮、来源和右侧详情，不会自动放大画布。
           </p>
         </div>
-        <div className="liquid-action rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-4 py-2 text-sm text-[var(--accent)]">
-          {baseGraph.nodes.length} 节点 · {baseGraph.edges.length} 关系 · {state.documents.length} 资料
-        </div>
-      </div>
-
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <WorkspaceBadge />
         <div className="flex flex-wrap items-center gap-2">
-          {currentWorkspace?.type === "admin_public" && (
-            <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--surface-soft)] px-4 py-2 text-xs text-[var(--text-muted)]">
-              v{currentWorkspace.version} · 最近发布 {formatShanghaiDateTime(currentWorkspace.lastPublishedAt)} · {currentWorkspace.updateSummary ?? "暂无更新说明"}
-            </span>
-          )}
+          <div className="liquid-action rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-4 py-2 text-sm text-[var(--accent)]">
+            {baseGraph.nodes.length} 节点 · {baseGraph.edges.length} 关系 · {state.documents.length} 资料
+          </div>
           {canEditCurrentWorkspace && currentWorkspace?.type === "admin_public" ? (
             <button type="button" onClick={() => publishWorkspace("管理员发布了新的共享星图更新。")} className="btn-secondary">
               发布更新
@@ -319,6 +319,7 @@ export default function Graph({ onOpenAssistant }: GraphProps) {
             setScopeNodeId(nodeId);
             setMode("local");
           }}
+          onDeleteNode={handleDeleteGraphNode}
         />
         <NodeDetailPanel
           canEdit={canEditCurrentWorkspace}

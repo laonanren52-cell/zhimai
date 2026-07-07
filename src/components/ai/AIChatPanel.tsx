@@ -3,9 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import { askWithSources } from "../../services/aiService";
 import { useAiStatus } from "../../store/aiStatusStore";
 import { useKnowledgeStore } from "../../store/knowledgeStore";
-import type { AnswerMode, GeneratedOutput, QAResult } from "../../types/ai";
-import AiModeBadge from "../common/AiModeBadge";
-import WorkspaceBadge from "../common/WorkspaceBadge";
+import type { AnswerMode, GeneratedOutput, QAResult, WebSourceReference } from "../../types/ai";
+import type { SourceReference } from "../../types/graph";
 import SourceCard from "./SourceCard";
 
 const answerModes: Array<{ key: AnswerMode; label: string; detail: string; icon: LucideIcon }> = [
@@ -49,6 +48,8 @@ export default function AIChatPanel() {
   const [saved, setSaved] = useState(false);
   const [copied, setCopied] = useState(false);
   const [saveAs, setSaveAs] = useState<"output" | "concept" | "problem" | "tag">("output");
+  const [activeTaskGroup, setActiveTaskGroup] = useState(taskGroups[0].title);
+  const [sourceDetail, setSourceDetail] = useState<{ type: "local"; source: SourceReference } | { type: "web"; source: WebSourceReference } | null>(null);
 
   const answerableDocuments = state.documents.filter((document) => document.canAnswer);
   const chunkCount = answerableDocuments.reduce((sum, document) => sum + document.chunks.length, 0);
@@ -130,7 +131,9 @@ export default function AIChatPanel() {
     const nextMode = state.copilotContext?.answerMode ?? (state.copilotContext?.intent === "web" ? "web" : "hybrid");
     setQuestion(next);
     setAnswerMode(nextMode);
-    void submit(next, nextMode);
+    setResult(null);
+    setVisibleAnswer("");
+    setStatus("等待发送");
   }, [state.copilotContext?.nodeId, state.copilotContext?.intent]);
 
   return (
@@ -154,29 +157,42 @@ export default function AIChatPanel() {
           </div>
         </div>
 
-        <div className="space-y-5">
+        <div className="mb-4 grid grid-cols-3 gap-2">
           {taskGroups.map((group) => (
-            <section key={group.title}>
-              <h3 className="mb-2 text-sm font-medium text-[var(--accent)]">{group.title}</h3>
-              <div className="space-y-2">
-                {group.tasks.map((task) => (
-                  <button
-                    key={task}
-                    type="button"
-                    onClick={() => {
-                      const context = state.copilotContext?.nodeLabel ? `，当前节点是「${state.copilotContext.nodeLabel}」` : "";
-                      const next = `${task}${context}，请引用资料来源并给出可信度。`;
-                      setQuestion(next);
-                      void submit(next);
-                    }}
-                    className="micro-card task-card hover-lift w-full px-4 py-3 text-left text-sm text-[var(--text-secondary)]"
-                  >
-                    {task}
-                  </button>
-                ))}
-              </div>
-            </section>
+            <button
+              key={group.title}
+              type="button"
+              onClick={() => setActiveTaskGroup(group.title)}
+              className={`liquid-action rounded-2xl border px-3 py-2 text-sm transition ${activeTaskGroup === group.title ? "border-[var(--accent-border)] bg-[var(--accent-soft)] text-[var(--accent)]" : "border-[var(--border-subtle)] bg-[var(--surface-soft)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]"}`}
+            >
+              {group.title}
+            </button>
           ))}
+        </div>
+
+        <div className="space-y-2">
+          {taskGroups
+            .find((group) => group.title === activeTaskGroup)
+            ?.tasks.map((task) => (
+              <button
+                key={task}
+                type="button"
+                onClick={() => {
+                  const context = state.copilotContext?.nodeLabel ? `，当前节点是「${state.copilotContext.nodeLabel}」` : "";
+                  const next = `${task}${context}，请引用资料来源并给出可信度。`;
+                  setQuestion(next);
+                  setResult(null);
+                  setVisibleAnswer("");
+                  setStatus("等待发送");
+                }}
+                className="micro-card task-card hover-lift w-full px-4 py-3 text-left text-sm text-[var(--text-secondary)]"
+              >
+                {task}
+              </button>
+            ))}
+          <p className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-soft)] px-3 py-2 text-xs leading-5 text-[var(--text-faint)]">
+            预设任务只填充问题，不会自动请求。你也可以在输入框自定义提问。
+          </p>
         </div>
       </aside>
 
@@ -195,8 +211,6 @@ export default function AIChatPanel() {
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <WorkspaceBadge compact />
-              <AiModeBadge compact />
               <span className="rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-2 text-xs text-[var(--accent)]">
                 {confidenceLabel}
               </span>
@@ -309,7 +323,9 @@ export default function AIChatPanel() {
                   type="button"
                   onClick={() => {
                     setQuestion(item);
-                    void submit(item);
+                    setResult(null);
+                    setVisibleAnswer("");
+                    setStatus("等待发送");
                   }}
                   className="liquid-action rounded-full border border-[var(--border-subtle)] bg-[var(--surface-soft)] px-3 py-2 text-left text-xs text-[var(--text-secondary)] transition hover:border-[var(--accent-border)] hover:text-[var(--text-primary)]"
                 >
@@ -351,7 +367,7 @@ export default function AIChatPanel() {
             </div>
             <div className="space-y-3">
               {(result?.sources ?? []).length > 0 ? (
-                result?.sources.map((source) => <SourceCard key={`${source.documentId}-${source.chunkId ?? source.snippet}`} source={source} />)
+                result?.sources.map((source) => <SourceCard key={`${source.documentId}-${source.chunkId ?? source.snippet}`} source={source} onOpenSource={() => setSourceDetail({ type: "local", source })} />)
               ) : (
                 <div className="empty-orbit rounded-3xl p-4 text-sm leading-7 text-[var(--text-faint)]">
                   {contextDocuments.length === 0 ? "当前文件只有文件名，尚未完成正文解析，无法进行可靠回答。" : "还没有生成回答或命中来源片段。"}
@@ -368,7 +384,7 @@ export default function AIChatPanel() {
             </div>
             <div className="space-y-3">
               {(result?.webSources ?? []).length > 0 ? (
-                result?.webSources?.map((source) => <SourceCard key={`${source.url}-${source.retrievedAt}`} webSource={source} />)
+                result?.webSources?.map((source) => <SourceCard key={`${source.url}-${source.retrievedAt}`} webSource={source} onOpenSource={() => setSourceDetail({ type: "web", source })} />)
               ) : (
                 <div className="empty-orbit rounded-3xl p-4 text-sm leading-7 text-[var(--text-faint)]">
                   {webSourceEmptyMessage(answerMode, aiStatus.searchConfigured, aiStatus.connection)}
@@ -377,6 +393,26 @@ export default function AIChatPanel() {
             </div>
           </section>
         </div>
+        {sourceDetail && (
+          <div className="mt-5 rounded-3xl border border-[var(--accent-border)] bg-[var(--accent-soft)] p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold text-[var(--text-primary)]">
+                  {sourceDetail.type === "local" ? sourceDetail.source.documentTitle : sourceDetail.source.title}
+                </p>
+                <p className="mt-1 text-xs text-[var(--text-faint)]">
+                  {sourceDetail.type === "local" ? `片段 ${sourceDetail.source.chunkId ?? "未标记"} · 可信度 ${Math.round((sourceDetail.source.score ?? 0.24) * 100)}%` : `${sourceDetail.source.siteName} · 网页来源`}
+                </p>
+              </div>
+              <button type="button" onClick={() => setSourceDetail(null)} className="rounded-full border border-[var(--border-subtle)] bg-[var(--surface-soft)] px-3 py-1 text-xs text-[var(--text-muted)]">
+                关闭
+              </button>
+            </div>
+            <p className="mt-3 max-h-56 overflow-auto whitespace-pre-wrap rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-deep)] p-3 text-xs leading-6 text-[var(--text-secondary)]">
+              {sourceDetail.source.snippet}
+            </p>
+          </div>
+        )}
       </aside>
     </div>
   );

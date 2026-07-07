@@ -1,6 +1,7 @@
 import { Bot, ChevronDown, Clock, FileText, Globe2, Layers3, Link2, RefreshCw, Search, Sparkles, Trash2 } from "lucide-react";
 import { motion } from "framer-motion";
 import type { ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { nodeTypeMeta } from "../../data/mockGraphData";
 import type { GeneratedOutput } from "../../types/ai";
 import type { KnowledgeDocument } from "../../types/document";
@@ -25,6 +26,15 @@ interface NodeDetailPanelProps {
 }
 
 const outputActions = ["简历项目经历", "项目答辩稿", "PPT 大纲", "面试问答"];
+type WorkspacePanelKey = "recent" | "recommend" | "outputs" | "detail" | "actions";
+
+const workspacePanels: Array<{ key: WorkspacePanelKey; label: string }> = [
+  { key: "recent", label: "最近上传" },
+  { key: "recommend", label: "推荐操作" },
+  { key: "outputs", label: "最近成果" },
+  { key: "detail", label: "节点详情" },
+  { key: "actions", label: "节点操作" },
+];
 
 export default function NodeDetailPanel({
   canEdit,
@@ -39,6 +49,12 @@ export default function NodeDetailPanel({
   onDeleteNode,
   onReanalyzeDocument,
 }: NodeDetailPanelProps) {
+  const [activePanel, setActivePanel] = useState<WorkspacePanelKey>(node ? "detail" : "recent");
+
+  useEffect(() => {
+    if (node) setActivePanel("detail");
+  }, [node?.id]);
+
   if (!node) {
     return (
       <motion.aside
@@ -57,7 +73,21 @@ export default function NodeDetailPanel({
           </div>
         </div>
 
+        <div className="mt-4 grid grid-cols-3 gap-2">
+          {workspacePanels.slice(0, 3).map((panel) => (
+            <button
+              key={panel.key}
+              type="button"
+              onClick={() => setActivePanel(panel.key)}
+              className={`liquid-action rounded-2xl border px-3 py-2 text-xs transition ${activePanel === panel.key ? "border-[var(--accent-border)] bg-[var(--accent-soft)] text-[var(--accent)]" : "border-[var(--border-subtle)] bg-[var(--surface-soft)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]"}`}
+            >
+              {panel.label}
+            </button>
+          ))}
+        </div>
+
         <div className="graph-panel-scroll thin-scrollbar mt-4">
+          {activePanel === "recent" && (
           <DetailSection title="最近上传" icon={<FileText className="h-4 w-4 text-[var(--accent)]" />} defaultOpen>
             {documents.length === 0 ? (
               <p className="text-sm leading-7 text-[var(--text-faint)]">暂无资料。导入第一份资料后，这里会显示来源、摘要和可执行建议。</p>
@@ -72,7 +102,9 @@ export default function NodeDetailPanel({
               </div>
             )}
           </DetailSection>
+          )}
 
+          {activePanel === "recommend" && (
           <DetailSection title="推荐操作" icon={<Clock className="h-4 w-4 text-[var(--accent)]" />} defaultOpen>
             <div className="space-y-2">
               {recommendations.slice(0, 4).map((item) => (
@@ -83,8 +115,10 @@ export default function NodeDetailPanel({
               ))}
             </div>
           </DetailSection>
+          )}
 
-          <DetailSection title="最近成果" icon={<Layers3 className="h-4 w-4 text-[var(--accent)]" />} defaultOpen={false}>
+          {activePanel === "outputs" && (
+          <DetailSection title="最近成果" icon={<Layers3 className="h-4 w-4 text-[var(--accent)]" />} defaultOpen>
             {outputs.length === 0 ? (
               <p className="text-sm leading-7 text-[var(--text-faint)]">还没有保存的成果节点。你可以从知源 Copilot 或成果工坊生成并挂载到星图。</p>
             ) : (
@@ -98,6 +132,7 @@ export default function NodeDetailPanel({
               </div>
             )}
           </DetailSection>
+          )}
         </div>
       </motion.aside>
     );
@@ -126,7 +161,69 @@ export default function NodeDetailPanel({
         </div>
       </div>
 
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        {workspacePanels.map((panel) => (
+          <button
+            key={panel.key}
+            type="button"
+            onClick={() => setActivePanel(panel.key)}
+            className={`liquid-action rounded-2xl border px-3 py-2 text-xs transition ${activePanel === panel.key ? "border-[var(--accent-border)] bg-[var(--accent-soft)] text-[var(--accent)]" : "border-[var(--border-subtle)] bg-[var(--surface-soft)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]"}`}
+          >
+            {panel.label}
+          </button>
+        ))}
+      </div>
+
       <div className="graph-panel-scroll thin-scrollbar mt-4">
+        {activePanel === "recent" && (
+          <DetailSection title="最近上传" icon={<FileText className="h-4 w-4 text-[var(--accent)]" />} defaultOpen>
+            {documents.length === 0 ? (
+              <p className="text-sm leading-7 text-[var(--text-faint)]">暂无资料。</p>
+            ) : (
+              <div className="space-y-2">
+                {documents.slice(0, 5).map((document) => (
+                  <div key={document.id} className="micro-card graph-compact-card">
+                    <p className="truncate text-sm font-medium text-[var(--text-primary)]">{document.title}</p>
+                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--text-faint)]">{document.summary}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </DetailSection>
+        )}
+
+        {activePanel === "recommend" && (
+          <DetailSection title="推荐操作" icon={<Clock className="h-4 w-4 text-[var(--accent)]" />} defaultOpen>
+            <div className="space-y-2">
+              {recommendations.slice(0, 4).map((item) => (
+                <div key={item.id} className="rounded-2xl border border-[var(--accent-border)] bg-[var(--accent-soft)] p-3">
+                  <p className="text-sm font-medium text-[var(--text-primary)]">{item.title}</p>
+                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--text-muted)]">{item.detail}</p>
+                </div>
+              ))}
+            </div>
+          </DetailSection>
+        )}
+
+        {activePanel === "outputs" && (
+          <DetailSection title="最近成果" icon={<Layers3 className="h-4 w-4 text-[var(--accent)]" />} defaultOpen>
+            {outputs.length === 0 ? (
+              <p className="text-sm leading-7 text-[var(--text-faint)]">还没有保存的成果节点。</p>
+            ) : (
+              <div className="space-y-2">
+                {outputs.slice(0, 5).map((output) => (
+                  <div key={output.id} className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-soft)] p-3">
+                    <p className="truncate text-sm font-medium text-[var(--text-primary)]">{output.title}</p>
+                    <p className="mt-1 text-xs text-[var(--text-faint)]">{formatShanghaiDateTime(output.createdAt)}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </DetailSection>
+        )}
+
+        {activePanel === "detail" && (
+        <>
         <DetailSection title="基础信息" icon={<Sparkles className="h-4 w-4 text-[var(--accent)]" />} defaultOpen>
           <p className="text-sm leading-6 text-[var(--text-muted)]">{node.description || "当前节点暂无补充说明。"}</p>
           <div className="mt-3 grid grid-cols-2 gap-2">
@@ -196,9 +293,12 @@ export default function NodeDetailPanel({
             {edges.length === 0 && sourceSnippets.length === 0 && <p className="text-sm leading-6 text-[var(--text-faint)]">当前节点没有可用来源片段。若文件正文解析失败，Copilot 会拒绝生成可靠回答。</p>}
           </div>
         </DetailSection>
+        </>
+        )}
       </div>
 
-      <div className="graph-panel-footer">
+      {activePanel === "actions" && (
+      <div className="graph-panel-footer mt-4">
         <div className="mb-2 flex items-center gap-2 text-sm text-[var(--accent)]">
           <Sparkles className="h-4 w-4" />
           节点操作
@@ -256,6 +356,7 @@ export default function NodeDetailPanel({
           )}
         </div>
       </div>
+      )}
     </motion.aside>
   );
 }

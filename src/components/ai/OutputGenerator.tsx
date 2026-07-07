@@ -1,32 +1,35 @@
 import { Copy, Loader2, RefreshCw, Save, Sparkles } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { generateOutput } from "../../services/aiService";
 import { useAiStatus } from "../../store/aiStatusStore";
 import { useKnowledgeStore } from "../../store/knowledgeStore";
 import type { GeneratedOutput, GeneratedOutputType } from "../../types/ai";
-import WorkspaceBadge from "../common/WorkspaceBadge";
 import SourceCard from "./SourceCard";
 
-const outputTypes: Array<{ key: GeneratedOutputType; label: string; hint: string }> = [
+type OutputSelectionKey = GeneratedOutputType | "custom";
+
+const outputTypes: Array<{ key: OutputSelectionKey; label: string; hint: string }> = [
   { key: "resume", label: "简历项目经历", hint: "适合求职材料" },
   { key: "defense", label: "项目答辩稿", hint: "适合比赛答辩" },
   { key: "ppt", label: "PPT 大纲", hint: "适合路演展示" },
   { key: "interview", label: "面试问答", hint: "适合技术面试" },
   { key: "review", label: "复习计划", hint: "适合课程复盘" },
   { key: "summary", label: "项目总结", hint: "适合归档沉淀" },
+  { key: "custom", label: "自定义成果类型", hint: "周报、实验报告、项目复盘等" },
 ];
 
 export default function OutputGenerator() {
   const { state, addOutput, canEditCurrentWorkspace } = useKnowledgeStore();
   const { markAiSuccess, markAiFailure } = useAiStatus();
-  const [selectedType, setSelectedType] = useState<GeneratedOutputType>("resume");
+  const [selectedType, setSelectedType] = useState<OutputSelectionKey>("resume");
+  const [customType, setCustomType] = useState("");
   const [output, setOutput] = useState<GeneratedOutput | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  async function run(type = selectedType) {
+  async function run(type: OutputSelectionKey = selectedType) {
     setLoading(true);
     setError(null);
     setSaved(false);
@@ -38,14 +41,21 @@ export default function OutputGenerator() {
         setError("当前没有可用来源片段。请先上传可解析正文的资料，再生成成果。");
         return;
       }
-      const next = await generateOutput(type, {
+      if (type === "custom" && customType.trim().length < 2) {
+        setOutput(null);
+        setError("请输入自定义成果方向，例如周报、实验报告、项目复盘、竞赛介绍或作品说明。");
+        return;
+      }
+      const requestType: GeneratedOutputType = type === "custom" ? "summary" : type;
+      const next = await generateOutput(requestType, {
         documents: state.documents.slice(0, 4),
         nodeCount: state.graph.nodes.length,
         edgeCount: state.graph.edges.length,
         copilotContext: state.copilotContext,
+        customOutputType: type === "custom" ? customType.trim() : undefined,
       });
       markAiSuccess("generate-output");
-      setOutput(next);
+      setOutput(type === "custom" ? { ...next, title: customType.trim(), type: "summary" } : next);
       if (!next.body?.trim()) setError("AI 已返回结果，但正文为空，请重新生成。");
     } catch (err) {
       markAiFailure("generate-output", err);
@@ -54,10 +64,6 @@ export default function OutputGenerator() {
       setLoading(false);
     }
   }
-
-  useEffect(() => {
-    void run(selectedType);
-  }, []);
 
   return (
     <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]">
@@ -78,7 +84,8 @@ export default function OutputGenerator() {
               type="button"
               onClick={() => {
                 setSelectedType(item.key);
-                void run(item.key);
+                setOutput(null);
+                setError(null);
               }}
               className={`micro-card hover-lift w-full p-4 text-left ${selectedType === item.key ? "border-[var(--accent-border)] bg-[var(--selected-bg)] shadow-[0_0_28px_var(--glow-accent)]" : ""}`}
             >
@@ -87,6 +94,24 @@ export default function OutputGenerator() {
             </button>
           ))}
         </div>
+        {selectedType === "custom" && (
+          <div className="mt-4 rounded-3xl border border-[var(--border-subtle)] bg-[var(--surface-soft)] p-4">
+            <label className="text-sm font-medium text-[var(--text-primary)]" htmlFor="custom-output-type">
+              自定义成果方向
+            </label>
+            <textarea
+              id="custom-output-type"
+              value={customType}
+              onChange={(event) => setCustomType(event.target.value)}
+              placeholder="例如：周报、实验报告、项目复盘、竞赛介绍、作品说明..."
+              className="input-shell mt-3 min-h-24 w-full resize-y rounded-2xl px-4 py-3 text-sm"
+            />
+          </div>
+        )}
+        <button type="button" onClick={() => void run()} className="btn-primary mt-4 w-full justify-center">
+          <Sparkles className="h-4 w-4" />
+          生成成果
+        </button>
       </aside>
 
       <section className="lux-card rounded-3xl p-5 md:p-7">
@@ -97,7 +122,6 @@ export default function OutputGenerator() {
             <p className="mt-2 text-xs text-[var(--text-faint)]">来源状态：{output ? sourceStatusLabel(output.sourceStatus) : "等待生成"}</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <WorkspaceBadge compact />
             <button
               type="button"
               onClick={async () => {

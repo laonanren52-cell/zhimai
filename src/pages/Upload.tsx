@@ -2,8 +2,6 @@ import { useRef, useState } from "react";
 import AnalysisProgress from "../components/upload/AnalysisProgress";
 import AnalysisResultCard from "../components/upload/AnalysisResultCard";
 import UploadDropzone from "../components/upload/UploadDropzone";
-import AiModeBadge from "../components/common/AiModeBadge";
-import WorkspaceBadge from "../components/common/WorkspaceBadge";
 import { analyzeDocument, buildUnavailableAnalysis } from "../services/aiService";
 import { parseUploadedFile, validateUpload } from "../services/documentService";
 import { useAiStatus } from "../store/aiStatusStore";
@@ -228,30 +226,14 @@ export default function Upload({ onOpenGraph, onOpenAssistant }: UploadProps) {
     <div className="page-shell fade-in">
       <div className="mb-8 flex flex-col justify-between gap-4 md:flex-row md:items-end">
         <div className="max-w-4xl">
-          <p className="page-kicker">
-            上传 · 解析 · 切片 · 写入星图
-          </p>
           <h1 className="page-title-compact">知识导入</h1>
           <p className="page-subtitle">
             上传资料后，系统会解析正文、检测质量、切片保存来源，再抽取节点和关系写入知识星图。
           </p>
-          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-[var(--text-faint)]">
-            <AiModeBadge compact />
-            <span>文件解析、结构化分析和星图写入分段展示；局部失败不会被误报为整站不可用。</span>
-          </div>
         </div>
         <button type="button" onClick={onOpenGraph} className="btn-secondary">
           查看知识星图
         </button>
-      </div>
-
-      <div className="mb-5 flex flex-wrap items-center gap-3">
-        <WorkspaceBadge />
-        {!canEditCurrentWorkspace && (
-          <span className="rounded-full border border-[var(--warning-border)] bg-[var(--warning-bg)] px-4 py-2 text-sm text-[var(--warning)]">
-            只读共享星图不能上传资料。请切换到个人星图或管理员管理台。
-          </span>
-        )}
       </div>
 
       {!canEditCurrentWorkspace ? (
@@ -340,19 +322,17 @@ export default function Upload({ onOpenGraph, onOpenAssistant }: UploadProps) {
         </section>
       )}
 
-      <section id="manual-text-import" className="mt-5 grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
-        <div className="lux-card rounded-3xl p-6">
-          <p className="text-sm text-[var(--accent)]">手动复制正文导入</p>
-          <h2 className="mt-2 text-2xl font-semibold text-[var(--text-primary)]">文件解析失败时，直接粘贴正文</h2>
-          <p className="mt-3 text-sm leading-7 text-[var(--text-muted)]">
-            扫描版 PDF、编码异常 PDF 或暂不支持的格式，可以先把正文复制到这里，系统仍会完成切片、AI 分析和星图写入。
-          </p>
-        </div>
+      <section id="manual-text-import" className="mt-5 grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
         <div className="lux-card rounded-3xl p-5">
+          <div className="mb-4">
+            <p className="text-sm text-[var(--accent)]">手动粘贴正文</p>
+            <h2 className="mt-2 text-2xl font-semibold text-[var(--text-primary)]">粘贴正文并生成星图</h2>
+            <p className="mt-2 text-sm leading-6 text-[var(--text-muted)]">支持项目说明、课程笔记、会议记录和从异常文档中复制出的可读正文。</p>
+          </div>
           <textarea
             value={manualText}
             onChange={(event) => setManualText(event.target.value)}
-            placeholder="粘贴文档正文、项目说明、课程笔记或会议记录..."
+            placeholder="粘贴正文 / 项目说明 / 笔记 / 课程内容..."
             className="input-shell min-h-[160px] w-full resize-y rounded-2xl px-4 py-3 text-sm leading-7 placeholder:text-[var(--text-faint)]"
           />
           <div className="mt-3 flex items-center justify-between gap-3">
@@ -360,6 +340,15 @@ export default function Upload({ onOpenGraph, onOpenAssistant }: UploadProps) {
             <button type="button" onClick={() => void handleManualImport()} className="btn-secondary">
               手动导入并生成星图
             </button>
+          </div>
+        </div>
+        <div className="lux-card rounded-3xl p-6">
+          <p className="text-sm text-[var(--accent)]">适用场景</p>
+          <h2 className="mt-2 text-2xl font-semibold text-[var(--text-primary)]">当文件无法可靠解析时使用</h2>
+          <div className="mt-4 grid gap-3 text-sm leading-7 text-[var(--text-muted)]">
+            <p className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-soft)] px-4 py-3">扫描版 PDF、图片型材料：先用外部 OCR 或手动复制正文后导入。</p>
+            <p className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-soft)] px-4 py-3">乱码、换行异常、结构混乱文档：粘贴整理后的正文可提升节点质量。</p>
+            <p className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-soft)] px-4 py-3">导入后会执行同一套切片、AI 分析和星图写入流程。</p>
           </div>
         </div>
       </section>
