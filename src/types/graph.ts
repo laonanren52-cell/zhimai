@@ -16,7 +16,12 @@ export type GraphRelationType =
   | "depends_on"
   | "solves"
   | "generates"
-  | "related_to";
+  | "related_to"
+  | "proves"
+  | "references"
+  | "custom";
+
+export type GraphLayoutMode = "auto" | "stable" | "free";
 
 export interface GraphNode {
   id: string;
@@ -31,9 +36,20 @@ export interface GraphNode {
   cluster?: string;
   x?: number;
   y?: number;
+  fixed?: boolean;
+  layoutMode?: GraphLayoutMode;
+  positionUpdatedAt?: string;
   analysisProvider?: string;
   analysisSourceStatus?: "api" | "mock" | "local_rule";
   analyzedAt?: string;
+  tags?: string[];
+  sourceNote?: string;
+  isManual?: boolean;
+  isRoot?: boolean;
+  originalDescription?: string;
+  userDescription?: string;
+  updatedAt?: string;
+  updatedBy?: string;
 }
 
 export interface GraphEdge {
@@ -43,6 +59,12 @@ export interface GraphEdge {
   to: string;
   label?: string;
   relationType: GraphRelationType;
+  description?: string;
+  isBidirectional?: boolean;
+  isManual?: boolean;
+  createdBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
   weight?: number;
   confidence?: number;
   evidence?: string;

@@ -24,9 +24,11 @@ import {
   getAdminConfig,
   getAdminOverview,
   getUserPreferences,
+  testAdminCustomProvider,
   updateAdminConfig,
   updateUserPreferences,
   type AdminOverview,
+  type CustomAiProviderPatch,
   type SystemConfigSummary,
 } from "../services/backendDataService";
 import { useAiStatus } from "../store/aiStatusStore";
@@ -45,6 +47,17 @@ const defaultPreferences: UserPreferences = {
   density: "comfortable",
   sidebarExpanded: false,
   updatedAt: "",
+};
+
+const emptyCustomProvider: CustomAiProviderPatch = {
+  name: "",
+  baseUrl: "",
+  model: "",
+  interfaceType: "openai-compatible",
+  enabled: true,
+  isDefault: false,
+  note: "",
+  apiKey: "",
 };
 
 function preferenceStorageKey(userId?: string) {
@@ -98,6 +111,8 @@ export default function AdminSettings() {
     ocrApiKey: "",
   });
   const [savingConfig, setSavingConfig] = useState(false);
+  const [customProviderDraft, setCustomProviderDraft] = useState<CustomAiProviderPatch>(emptyCustomProvider);
+  const [testingProviderId, setTestingProviderId] = useState<string | null>(null);
   const [preferences, setPreferences] = useState<UserPreferences>(defaultPreferences);
 
   const canAccessAdminPanel = currentUser?.role === "admin" && currentUser.canAccessAdminPanel !== false;
@@ -124,7 +139,7 @@ export default function AdminSettings() {
         setSystemConfig(config);
         setConfigDraft((draft) => ({
           ...draft,
-          aiProvider: config.ai.provider || "mock",
+          aiProvider: config.ai.providerId || config.ai.provider || "mock",
           aiModel: config.ai.model || "mock",
           aiEnabled: config.ai.enabled,
           allowMock: config.ai.allowMock,
@@ -184,6 +199,13 @@ export default function AdminSettings() {
   const generateCount = state.recentActivities.filter((activity) => activity.type === "generate").length;
   const onlineUsers = displayUsers.filter((user) => user.online || user.isOnline);
   const permissionStatus = currentAccess?.canEdit ? "可编辑" : currentAccess?.canRead ? "只读" : "无访问权限";
+  const customProviders = systemConfig?.ai.customProviders ?? [];
+  const aiProviderOptions: Array<[string, string]> = [
+    ["deepseek", "DeepSeek"],
+    ["openai", "OpenAI"],
+    ["mock", "Mock"],
+    ...customProviders.map((provider): [string, string] => [provider.id, provider.name]),
+  ];
 
   const allSections: Array<{ key: SettingsSection; label: string; detail: string; icon: ReactNode; adminOnly?: boolean }> = [
     { key: "profile", label: "个人资料", detail: "用户名、昵称、邮箱", icon: <UserCog className="h-4 w-4" /> },
@@ -235,6 +257,16 @@ export default function AdminSettings() {
           model: configDraft.aiModel,
           enabled: configDraft.aiEnabled,
           allowMock: configDraft.allowMock,
+          customProviders: customProviders.map((provider) => ({
+            id: provider.id,
+            name: provider.name,
+            baseUrl: provider.baseUrl,
+            model: provider.model,
+            interfaceType: provider.interfaceType,
+            enabled: provider.enabled,
+            isDefault: provider.id === configDraft.aiProvider,
+            note: provider.note,
+          })),
           ...(configDraft.aiApiKey.trim() ? { apiKey: configDraft.aiApiKey.trim() } : {}),
         },
         search: {
@@ -256,6 +288,94 @@ export default function AdminSettings() {
       setNotice(error instanceof Error ? error.message : "系统配置保存失败。");
     } finally {
       setSavingConfig(false);
+    }
+  }
+
+  async function saveCustomProvider(provider: CustomAiProviderPatch = customProviderDraft) {
+    if (!canAccessAdminPanel) return;
+    const name = provider.name.trim();
+    const baseUrl = provider.baseUrl.trim();
+    const model = provider.model.trim();
+    if (!name || !baseUrl || !model) {
+      setNotice("自定义 Provider 需要填写名称、API Base URL 和 Model。");
+      return;
+    }
+    const id = provider.id || name.trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, "-").replace(/^-+|-+$/g, "");
+    const nextProvider = { ...provider, id, name, baseUrl, model };
+    const providers = [
+      ...customProviders.filter((item) => item.id !== id).map((item) => ({
+        id: item.id,
+        name: item.name,
+        baseUrl: item.baseUrl,
+        model: item.model,
+        interfaceType: item.interfaceType,
+        enabled: item.enabled,
+        isDefault: nextProvider.isDefault ? false : item.isDefault,
+        note: item.note,
+      })),
+      nextProvider,
+    ];
+    try {
+      const { config } = await updateAdminConfig({
+        ai: {
+          provider: nextProvider.isDefault ? id : configDraft.aiProvider,
+          model: nextProvider.isDefault ? model : configDraft.aiModel,
+          enabled: configDraft.aiEnabled,
+          allowMock: configDraft.allowMock,
+          customProviders: providers,
+        },
+      });
+      setSystemConfig(config);
+      setConfigDraft((draft) => ({
+        ...draft,
+        aiProvider: nextProvider.isDefault ? id : draft.aiProvider,
+        aiModel: nextProvider.isDefault ? model : draft.aiModel,
+      }));
+      setCustomProviderDraft(emptyCustomProvider);
+      await refreshHealth();
+      setNotice(`自定义 Provider「${name}」已保存。`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "自定义 Provider 保存失败。");
+    }
+  }
+
+  async function deleteCustomProvider(providerId: string) {
+    if (!window.confirm("确认删除该自定义 Provider 吗？已保存的 API Key 也会从后端配置中移除。")) return;
+    const providers = customProviders
+      .filter((item) => item.id !== providerId)
+      .map((item) => ({
+        id: item.id,
+        name: item.name,
+        baseUrl: item.baseUrl,
+        model: item.model,
+        interfaceType: item.interfaceType,
+        enabled: item.enabled,
+        isDefault: item.isDefault,
+        note: item.note,
+      }));
+    const fallbackProvider = configDraft.aiProvider === providerId ? "deepseek" : configDraft.aiProvider;
+    try {
+      const { config } = await updateAdminConfig({ ai: { provider: fallbackProvider, model: fallbackProvider === "deepseek" ? "deepseek-chat" : configDraft.aiModel, customProviders: providers } });
+      setSystemConfig(config);
+      setConfigDraft((draft) => ({ ...draft, aiProvider: fallbackProvider, aiModel: config.ai.model }));
+      await refreshHealth();
+      setNotice("自定义 Provider 已删除。");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "删除自定义 Provider 失败。");
+    }
+  }
+
+  async function testCustomProvider(provider: CustomAiProviderPatch) {
+    setTestingProviderId(provider.id || provider.name);
+    setNotice(null);
+    try {
+      const { result, config } = await testAdminCustomProvider(provider);
+      setSystemConfig(config);
+      setNotice(result.message);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "连接测试失败。");
+    } finally {
+      setTestingProviderId(null);
     }
   }
 
@@ -383,13 +503,115 @@ export default function AdminSettings() {
                   <div className="grid gap-3 rounded-3xl border border-[var(--border-subtle)] bg-[var(--surface-soft)] p-4">
                     <h3 className="text-sm font-semibold text-[var(--text-primary)]">AI 配置</h3>
                     <div className="grid gap-3 md:grid-cols-2">
-                      <SelectField label="AI Provider" value={configDraft.aiProvider} onChange={(value) => setConfigDraft((draft) => ({ ...draft, aiProvider: value }))} options={[["deepseek", "DeepSeek"], ["openai", "OpenAI"], ["mock", "Mock"]]} />
+                      <SelectField
+                        label="AI Provider"
+                        value={configDraft.aiProvider}
+                        onChange={(value) => {
+                          const custom = customProviders.find((provider) => provider.id === value);
+                          setConfigDraft((draft) => ({ ...draft, aiProvider: value, aiModel: custom?.model || draft.aiModel }));
+                        }}
+                        options={aiProviderOptions}
+                      />
                       <TextField label="当前模型" value={configDraft.aiModel} onChange={(value) => setConfigDraft((draft) => ({ ...draft, aiModel: value }))} placeholder="deepseek-v4-flash" />
                       <SwitchRow label="启用真实 AI" checked={configDraft.aiEnabled} onChange={(value) => setConfigDraft((draft) => ({ ...draft, aiEnabled: value }))} />
                       <SwitchRow label="允许 Mock 演示模式" checked={configDraft.allowMock} onChange={(value) => setConfigDraft((draft) => ({ ...draft, allowMock: value }))} />
                       <InfoRow label="AI Key 状态" value={systemConfig?.ai.apiKeyConfigured ? `已配置 ${systemConfig.ai.apiKeyMasked || ""}` : "未配置"} />
                       <TextField label="重新填写 AI Key" value={configDraft.aiApiKey} onChange={(value) => setConfigDraft((draft) => ({ ...draft, aiApiKey: value }))} placeholder="不展示旧 Key，留空则保持不变" type="password" />
                     </div>
+                  </div>
+
+                  <div className="grid gap-4 rounded-3xl border border-[var(--border-subtle)] bg-[var(--surface-soft)] p-4">
+                    <div>
+                      <h3 className="text-sm font-semibold text-[var(--text-primary)]">自定义 AI 配置</h3>
+                      <p className="mt-1 text-xs leading-5 text-[var(--text-faint)]">适用于通义千问、智谱 GLM、Kimi、OpenRouter、硅基流动、本地 Ollama 和其他兼容 OpenAI 格式的服务。</p>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <TextField label="Provider 名称" value={customProviderDraft.name} onChange={(value) => setCustomProviderDraft((draft) => ({ ...draft, name: value }))} placeholder="例如：硅基流动" />
+                      <TextField label="API Base URL" value={customProviderDraft.baseUrl} onChange={(value) => setCustomProviderDraft((draft) => ({ ...draft, baseUrl: value }))} placeholder="https://api.example.com/v1" />
+                      <TextField label="Model 名称" value={customProviderDraft.model} onChange={(value) => setCustomProviderDraft((draft) => ({ ...draft, model: value }))} placeholder="Qwen/Qwen2.5-72B-Instruct" />
+                      <SelectField
+                        label="接口类型"
+                        value={customProviderDraft.interfaceType}
+                        onChange={(value) => setCustomProviderDraft((draft) => ({ ...draft, interfaceType: value as CustomAiProviderPatch["interfaceType"] }))}
+                        options={[["openai-compatible", "OpenAI-compatible"], ["deepseek-compatible", "DeepSeek-compatible"], ["custom-http", "Custom HTTP"]]}
+                      />
+                      <TextField label="重新填写 API Key" value={customProviderDraft.apiKey || ""} onChange={(value) => setCustomProviderDraft((draft) => ({ ...draft, apiKey: value }))} placeholder="只提交到后端，不展示旧 Key" type="password" />
+                      <TextField label="备注说明" value={customProviderDraft.note || ""} onChange={(value) => setCustomProviderDraft((draft) => ({ ...draft, note: value }))} placeholder="用途、计费账号或部署说明" />
+                      <SwitchRow label="启用该 Provider" checked={customProviderDraft.enabled} onChange={(value) => setCustomProviderDraft((draft) => ({ ...draft, enabled: value }))} />
+                      <SwitchRow label="设为默认模型" checked={customProviderDraft.isDefault} onChange={(value) => setCustomProviderDraft((draft) => ({ ...draft, isDefault: value }))} />
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" onClick={() => void saveCustomProvider()} className="btn-primary px-4 py-2">
+                        <Save className="h-4 w-4" />
+                        保存自定义 Provider
+                      </button>
+                      <button type="button" onClick={() => void testCustomProvider(customProviderDraft)} className="btn-secondary px-4 py-2" disabled={testingProviderId === (customProviderDraft.id || customProviderDraft.name)}>
+                        <RefreshCw className="h-4 w-4" />
+                        {testingProviderId === (customProviderDraft.id || customProviderDraft.name) ? "测试中" : "测试连接"}
+                      </button>
+                    </div>
+                    {customProviders.length > 0 && (
+                      <div className="grid gap-2">
+                        {customProviders.map((provider) => (
+                          <article key={provider.id} className="micro-card p-4">
+                            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <h4 className="text-sm font-semibold text-[var(--text-primary)]">{provider.name}</h4>
+                                  {provider.isDefault && <span className="rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-2 py-0.5 text-xs text-[var(--accent)]">默认</span>}
+                                  <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--surface-deep)] px-2 py-0.5 text-xs text-[var(--text-muted)]">{provider.enabled ? "启用" : "停用"}</span>
+                                  <span className={`rounded-full border px-2 py-0.5 text-xs ${provider.lastTestOk ? "border-[var(--success-border)] bg-[var(--success-bg)] text-[var(--success)]" : "border-[var(--warning-border)] bg-[var(--warning-bg)] text-[var(--warning)]"}`}>
+                                    {provider.lastTestOk ? "模型可用" : "待测试"}
+                                  </span>
+                                </div>
+                                <p className="mt-2 truncate text-xs text-[var(--text-faint)]">{provider.baseUrl} · {provider.model}</p>
+                                <p className="mt-1 text-xs text-[var(--text-faint)]">API Key：{provider.apiKeyConfigured ? `已配置 ${provider.apiKeyMasked || ""}` : "未配置"} · {provider.interfaceType}</p>
+                                {provider.lastTestMessage && <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--text-faint)]">{provider.lastTestMessage}</p>}
+                              </div>
+                              <div className="flex shrink-0 flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setCustomProviderDraft({
+                                    id: provider.id,
+                                    name: provider.name,
+                                    baseUrl: provider.baseUrl,
+                                    model: provider.model,
+                                    interfaceType: provider.interfaceType,
+                                    enabled: provider.enabled,
+                                    isDefault: provider.isDefault,
+                                    note: provider.note,
+                                    apiKey: "",
+                                  })}
+                                  className="btn-secondary px-3 py-2"
+                                >
+                                  编辑
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void testCustomProvider({
+                                    id: provider.id,
+                                    name: provider.name,
+                                    baseUrl: provider.baseUrl,
+                                    model: provider.model,
+                                    interfaceType: provider.interfaceType,
+                                    enabled: provider.enabled,
+                                    isDefault: provider.isDefault,
+                                    note: provider.note,
+                                  })}
+                                  className="btn-secondary px-3 py-2"
+                                  disabled={testingProviderId === provider.id}
+                                >
+                                  测试
+                                </button>
+                                <button type="button" onClick={() => void deleteCustomProvider(provider.id)} className="rounded-full border border-[var(--danger-border)] bg-[var(--danger-bg)] px-3 py-2 text-sm text-[var(--danger)]">
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              </div>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   <div className="grid gap-3 rounded-3xl border border-[var(--border-subtle)] bg-[var(--surface-soft)] p-4">

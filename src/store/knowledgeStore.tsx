@@ -6,7 +6,7 @@ import { getWorkspaceDataset, migrateLocalData, recordRemoteActivity, saveWorksp
 import { useAuthStore } from "./authStore";
 import type { GeneratedOutput } from "../types/ai";
 import type { KnowledgeDocument, ParsedDocument, ParseDiagnostics, TextChunk } from "../types/document";
-import type { AnalysisResult, GraphData, GraphEdge, GraphNode, GraphNodeType, SourceReference } from "../types/graph";
+import type { AnalysisResult, GraphData, GraphEdge, GraphLayoutMode, GraphNode, GraphNodeType, SourceReference } from "../types/graph";
 import { ADMIN_PUBLIC_WORKSPACE_ID, type Workspace, type WorkspaceAccess } from "../types/workspace";
 
 const STORAGE_KEY = "zhimai-ai-knowledge-store-v6";
@@ -65,7 +65,14 @@ type KnowledgeAction =
   | { type: "hydrateWorkspace"; workspaceId: string; data: WorkspaceDataset }
   | { type: "ingestAnalysis"; workspaceId: string; file: File; content: string; analysis: AnalysisResult; parsed?: ParsedDocument }
   | { type: "replaceDocumentAnalysis"; workspaceId: string; documentId: string; content: string; analysis: AnalysisResult; parsed?: ParsedDocument }
+  | { type: "createNode"; workspaceId: string; node: GraphNode }
+  | { type: "updateNode"; workspaceId: string; nodeId: string; patch: Partial<GraphNode>; actorName?: string }
   | { type: "deleteNode"; workspaceId: string; nodeId: string }
+  | { type: "upsertEdge"; workspaceId: string; edge: GraphEdge }
+  | { type: "deleteEdge"; workspaceId: string; edgeId: string }
+  | { type: "updateNodePositions"; workspaceId: string; positions: Array<{ id: string; x: number; y: number; fixed?: boolean; layoutMode?: GraphLayoutMode }> }
+  | { type: "setNodesFixed"; workspaceId: string; nodeIds?: string[]; fixed: boolean }
+  | { type: "resetLayout"; workspaceId: string }
   | { type: "deleteDocument"; workspaceId: string; documentId: string }
   | { type: "clearGraph"; workspaceId: string }
   | { type: "resetDemo" }
@@ -80,7 +87,14 @@ interface KnowledgeContextValue {
   canEditCurrentWorkspace: boolean;
   ingestAnalysis: (file: File, content: string, analysis: AnalysisResult, parsed?: ParsedDocument) => void;
   replaceDocumentAnalysis: (documentId: string, content: string, analysis: AnalysisResult, parsed?: ParsedDocument) => void;
+  createNode: (node: GraphNode) => void;
+  updateNode: (nodeId: string, patch: Partial<GraphNode>) => void;
   deleteNode: (nodeId: string) => void;
+  upsertEdge: (edge: GraphEdge) => void;
+  deleteEdge: (edgeId: string) => void;
+  updateNodePositions: (positions: Array<{ id: string; x: number; y: number; fixed?: boolean; layoutMode?: GraphLayoutMode }>) => void;
+  setNodesFixed: (nodeIds: string[] | undefined, fixed: boolean) => void;
+  resetLayout: () => void;
   deleteDocument: (documentId: string) => void;
   clearGraph: () => void;
   resetDemo: () => void;
@@ -609,6 +623,37 @@ function knowledgeReducer(state: KnowledgeState, action: KnowledgeAction): Knowl
     return withRecommendations(nextState);
   }
 
+  if (action.type === "createNode") {
+    const workspaceId = workspaceIdOrDefault(action.workspaceId);
+    const node = { ...action.node, workspaceId, isManual: action.node.isManual ?? true, updatedAt: nowIso() };
+    return withRecommendations({
+      ...state,
+      graph: compactGraph({ nodes: [...state.graph.nodes.filter((item) => item.id !== node.id), node], edges: state.graph.edges }),
+      highlightedNodeIds: [node.id],
+      recentActivities: addActivity(state, { type: "reorganize", title: `已新建节点：${node.label}`, detail: "手动节点已加入当前知识星图。", nodeIds: [node.id] }, workspaceId),
+    });
+  }
+
+  if (action.type === "updateNode") {
+    const workspaceId = workspaceIdOrDefault(action.workspaceId);
+    const target = state.graph.nodes.find((node) => node.id === action.nodeId && nodeWorkspaceId(node) === workspaceId);
+    if (!target) return state;
+    const nextNode: GraphNode = {
+      ...target,
+      ...action.patch,
+      originalDescription: target.originalDescription ?? target.description,
+      userDescription: action.patch.description ?? action.patch.userDescription ?? target.userDescription,
+      updatedAt: nowIso(),
+      updatedBy: action.actorName,
+    };
+    return withRecommendations({
+      ...state,
+      graph: compactGraph({ nodes: state.graph.nodes.map((node) => (node.id === action.nodeId ? nextNode : node)), edges: state.graph.edges }),
+      highlightedNodeIds: [action.nodeId],
+      recentActivities: addActivity(state, { type: "reorganize", title: `已编辑节点：${nextNode.label}`, detail: "节点名称、摘要或标签已更新。", nodeIds: [action.nodeId] }, workspaceId),
+    });
+  }
+
   if (action.type === "deleteNode") {
     const workspaceId = workspaceIdOrDefault(action.workspaceId);
     const target = state.graph.nodes.find((node) => node.id === action.nodeId && nodeWorkspaceId(node) === workspaceId);
@@ -622,6 +667,94 @@ function knowledgeReducer(state: KnowledgeState, action: KnowledgeAction): Knowl
       highlightedNodeIds: [],
       copilotContext: state.copilotContext?.nodeId === action.nodeId ? null : state.copilotContext,
       recentActivities: addActivity(state, { type: "delete", title: `已删除节点：${target.label}`, detail: "相关关系边已同步清理。", nodeIds: [action.nodeId] }),
+    });
+  }
+
+  if (action.type === "upsertEdge") {
+    const workspaceId = workspaceIdOrDefault(action.workspaceId);
+    const nodeIds = new Set(state.graph.nodes.filter((node) => nodeWorkspaceId(node) === workspaceId).map((node) => node.id));
+    if (!nodeIds.has(action.edge.from) || !nodeIds.has(action.edge.to) || action.edge.from === action.edge.to) return state;
+    const stamp = nowIso();
+    const existing = state.graph.edges.find((edge) => edge.id === action.edge.id);
+    const edge: GraphEdge = {
+      ...(existing ?? {}),
+      ...action.edge,
+      workspaceId,
+      isManual: action.edge.isManual ?? true,
+      confidence: action.edge.confidence ?? 1,
+      createdAt: existing?.createdAt ?? action.edge.createdAt ?? stamp,
+      updatedAt: stamp,
+    };
+    return withRecommendations({
+      ...state,
+      graph: compactGraph({ nodes: state.graph.nodes, edges: [...state.graph.edges.filter((item) => item.id !== edge.id), edge] }),
+      recentActivities: addActivity(state, { type: "reorganize", title: existing ? "已更新手动关系" : "已创建手动关系", detail: edge.description || edge.label || edge.relationType, nodeIds: [edge.from, edge.to] }, workspaceId),
+    });
+  }
+
+  if (action.type === "deleteEdge") {
+    const workspaceId = workspaceIdOrDefault(action.workspaceId);
+    const target = state.graph.edges.find((edge) => edge.id === action.edgeId && edgeWorkspaceId(edge, new Map(state.graph.nodes.map((node) => [node.id, node]))) === workspaceId);
+    if (!target) return state;
+    return withRecommendations({
+      ...state,
+      graph: compactGraph({ nodes: state.graph.nodes, edges: state.graph.edges.filter((edge) => edge.id !== action.edgeId) }),
+      recentActivities: addActivity(state, { type: "delete", title: `已删除关系：${target.label ?? target.relationType}`, detail: target.description || target.evidence || "关系边已删除。", nodeIds: [target.from, target.to] }, workspaceId),
+    });
+  }
+
+  if (action.type === "updateNodePositions") {
+    const workspaceId = workspaceIdOrDefault(action.workspaceId);
+    const positionMap = new Map(action.positions.map((position) => [position.id, position]));
+    return withRecommendations({
+      ...state,
+      graph: {
+        nodes: state.graph.nodes.map((node) => {
+          if (nodeWorkspaceId(node) !== workspaceId) return node;
+          const position = positionMap.get(node.id);
+          if (!position) return node;
+          return {
+            ...node,
+            x: Math.round(position.x),
+            y: Math.round(position.y),
+            fixed: position.fixed ?? node.fixed ?? true,
+            layoutMode: position.layoutMode ?? node.layoutMode ?? "free",
+            positionUpdatedAt: nowIso(),
+          };
+        }),
+        edges: state.graph.edges,
+      },
+    });
+  }
+
+  if (action.type === "setNodesFixed") {
+    const workspaceId = workspaceIdOrDefault(action.workspaceId);
+    const targetIds = action.nodeIds ? new Set(action.nodeIds) : null;
+    return withRecommendations({
+      ...state,
+      graph: {
+        nodes: state.graph.nodes.map((node) =>
+          nodeWorkspaceId(node) === workspaceId && (!targetIds || targetIds.has(node.id))
+            ? { ...node, fixed: action.fixed, layoutMode: action.fixed ? "free" : node.layoutMode, positionUpdatedAt: nowIso() }
+            : node,
+        ),
+        edges: state.graph.edges,
+      },
+    });
+  }
+
+  if (action.type === "resetLayout") {
+    const workspaceId = workspaceIdOrDefault(action.workspaceId);
+    return withRecommendations({
+      ...state,
+      graph: compactGraph({
+        nodes: state.graph.nodes.map((node) =>
+          nodeWorkspaceId(node) === workspaceId ? { ...node, x: undefined, y: undefined, fixed: false, layoutMode: "auto", positionUpdatedAt: nowIso() } : node,
+        ),
+        edges: state.graph.edges,
+      }),
+      highlightedNodeIds: [],
+      recentActivities: addActivity(state, { type: "reorganize", title: "已重置为自动布局", detail: "节点位置已重新交给自动布局计算。" }, workspaceId),
     });
   }
 
@@ -859,10 +992,44 @@ export function KnowledgeProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "replaceDocumentAnalysis", workspaceId, documentId, content, analysis, parsed });
         void recordRemoteActivity({ workspaceId, actionType: "upload", targetType: "document", targetId: documentId, detail: "重新分析资料并替换星图节点关系" });
       },
+      createNode: (node) => {
+        if (!guardWrite()) return;
+        dispatch({ type: "createNode", workspaceId, node });
+        void recordRemoteActivity({ workspaceId, actionType: "reorganize", targetType: "graphNode", targetId: node.id, detail: `新建星图节点：${node.label}` });
+      },
+      updateNode: (nodeId, patch) => {
+        if (!guardWrite()) return;
+        dispatch({ type: "updateNode", workspaceId, nodeId, patch, actorName: currentUser?.username });
+        void recordRemoteActivity({ workspaceId, actionType: "reorganize", targetType: "graphNode", targetId: nodeId, detail: "编辑星图节点" });
+      },
       deleteNode: (nodeId) => {
         if (!guardWrite()) return;
         dispatch({ type: "deleteNode", workspaceId, nodeId });
         void recordRemoteActivity({ workspaceId, actionType: "delete", targetType: "graphNode", targetId: nodeId, detail: "删除星图节点" });
+      },
+      upsertEdge: (edge) => {
+        if (!guardWrite()) return;
+        dispatch({ type: "upsertEdge", workspaceId, edge });
+        void recordRemoteActivity({ workspaceId, actionType: "reorganize", targetType: "graphEdge", targetId: edge.id, detail: `保存星图关系：${edge.label ?? edge.relationType}` });
+      },
+      deleteEdge: (edgeId) => {
+        if (!guardWrite()) return;
+        dispatch({ type: "deleteEdge", workspaceId, edgeId });
+        void recordRemoteActivity({ workspaceId, actionType: "delete", targetType: "graphEdge", targetId: edgeId, detail: "删除星图关系" });
+      },
+      updateNodePositions: (positions) => {
+        if (!guardWrite()) return;
+        dispatch({ type: "updateNodePositions", workspaceId, positions });
+      },
+      setNodesFixed: (nodeIds, fixed) => {
+        if (!guardWrite()) return;
+        dispatch({ type: "setNodesFixed", workspaceId, nodeIds, fixed });
+        void recordRemoteActivity({ workspaceId, actionType: "reorganize", targetType: "layout", targetId: workspaceId, detail: fixed ? "固定星图节点位置" : "取消固定星图节点位置" });
+      },
+      resetLayout: () => {
+        if (!guardWrite()) return;
+        dispatch({ type: "resetLayout", workspaceId });
+        void recordRemoteActivity({ workspaceId, actionType: "reorganize", targetType: "layout", targetId: workspaceId, detail: "重置星图自动布局" });
       },
       deleteDocument: (documentId) => {
         if (!guardWrite()) return;

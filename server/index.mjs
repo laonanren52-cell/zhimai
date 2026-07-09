@@ -173,6 +173,7 @@ function defaultSystemConfig() {
       allowMock: process.env.ALLOW_MOCK_MODE !== "false",
       deepseekApiKey: "",
       openaiApiKey: "",
+      customProviders: [],
       updatedAt: nowIso(),
     },
     search: {
@@ -193,16 +194,41 @@ function defaultSystemConfig() {
   };
 }
 
+function normalizeCustomProvider(value = {}) {
+  const name = String(value.name || value.provider || "").trim();
+  const id = String(value.id || slug(name) || `custom-${Date.now()}`).toLowerCase();
+  return {
+    id,
+    name: name || id,
+    baseUrl: String(value.baseUrl || "").trim(),
+    model: String(value.model || "").trim(),
+    interfaceType: ["openai-compatible", "deepseek-compatible", "custom-http"].includes(value.interfaceType) ? value.interfaceType : "openai-compatible",
+    enabled: value.enabled !== false,
+    isDefault: Boolean(value.isDefault),
+    note: String(value.note || "").slice(0, 500),
+    apiKey: String(value.apiKey || ""),
+    lastTestedAt: value.lastTestedAt || "",
+    lastTestOk: Boolean(value.lastTestOk),
+    lastTestMessage: String(value.lastTestMessage || "").slice(0, 500),
+    updatedAt: value.updatedAt || nowIso(),
+  };
+}
+
 function normalizeSystemConfig(value = {}) {
   const defaults = defaultSystemConfig();
+  const customProviders = Array.isArray(value.ai?.customProviders)
+    ? value.ai.customProviders.map(normalizeCustomProvider).filter((provider) => provider.name && provider.baseUrl)
+    : [];
+  const defaultCustom = customProviders.find((provider) => provider.isDefault && provider.enabled);
   return {
     ai: {
       ...defaults.ai,
       ...(value.ai && typeof value.ai === "object" ? value.ai : {}),
-      provider: String(value.ai?.provider || defaults.ai.provider || "mock").toLowerCase(),
-      model: String(value.ai?.model || defaults.ai.model || "mock"),
+      provider: String(value.ai?.provider || defaultCustom?.id || defaults.ai.provider || "mock").toLowerCase(),
+      model: String(value.ai?.model || defaultCustom?.model || defaults.ai.model || "mock"),
       enabled: typeof value.ai?.enabled === "boolean" ? value.ai.enabled : defaults.ai.enabled,
       allowMock: typeof value.ai?.allowMock === "boolean" ? value.ai.allowMock : defaults.ai.allowMock,
+      customProviders,
       updatedAt: value.ai?.updatedAt || defaults.ai.updatedAt,
     },
     search: {
@@ -243,9 +269,16 @@ function envKeyForProvider(provider) {
   return "";
 }
 
+function findCustomProvider(config, provider) {
+  const requested = String(provider || "").toLowerCase();
+  return (config.ai.customProviders ?? []).find((item) => item.id === requested || item.name.toLowerCase() === requested) || null;
+}
+
 function storedKeyForProvider(config, provider) {
   if (provider === "deepseek") return config.ai.deepseekApiKey || "";
   if (provider === "openai") return config.ai.openaiApiKey || "";
+  const custom = findCustomProvider(config, provider);
+  if (custom) return custom.apiKey || "";
   return "";
 }
 
@@ -266,18 +299,36 @@ function maskSecret(value = "") {
 function configSummary(config = readSystemConfig()) {
   const provider = config.ai.provider;
   const aiKey = storedKeyForProvider(config, provider) || envKeyForProvider(provider);
+  const custom = findCustomProvider(config, provider);
   const searchProvider = config.search.provider;
   const activeSearchKey = searchKey(config, searchProvider);
   const ocrKey = config.ocr.apiKey || process.env.OCR_API_KEY || "";
   return {
     ai: {
-      provider,
-      model: config.ai.model,
+      provider: custom?.name || provider,
+      providerId: custom?.id || provider,
+      model: custom?.model || config.ai.model,
       enabled: config.ai.enabled,
       allowMock: config.ai.allowMock,
       configured: provider === "mock" ? true : Boolean(aiKey),
       apiKeyConfigured: Boolean(aiKey),
       apiKeyMasked: maskSecret(aiKey),
+      customProviders: (config.ai.customProviders ?? []).map((item) => ({
+        id: item.id,
+        name: item.name,
+        baseUrl: item.baseUrl,
+        model: item.model,
+        interfaceType: item.interfaceType,
+        enabled: item.enabled,
+        isDefault: item.isDefault,
+        note: item.note,
+        apiKeyConfigured: Boolean(item.apiKey),
+        apiKeyMasked: maskSecret(item.apiKey),
+        lastTestedAt: item.lastTestedAt,
+        lastTestOk: item.lastTestOk,
+        lastTestMessage: item.lastTestMessage,
+        updatedAt: item.updatedAt,
+      })),
       updatedAt: config.ai.updatedAt,
     },
     search: {
@@ -312,6 +363,26 @@ function applySystemConfigPatch(current, payload = {}) {
     if (typeof ai.apiKey === "string" && ai.apiKey.trim()) {
       if (next.ai.provider === "openai") next.ai.openaiApiKey = ai.apiKey.trim();
       else if (next.ai.provider === "deepseek") next.ai.deepseekApiKey = ai.apiKey.trim();
+      else {
+        const target = findCustomProvider(next, next.ai.provider);
+        if (target) target.apiKey = ai.apiKey.trim();
+      }
+    }
+    if (Array.isArray(ai.customProviders)) {
+      const previous = new Map((next.ai.customProviders ?? []).map((item) => [item.id, item]));
+      next.ai.customProviders = ai.customProviders
+        .map((provider) => {
+          const normalized = normalizeCustomProvider({ ...(previous.get(String(provider.id || "").toLowerCase()) ?? {}), ...provider });
+          if (!provider.apiKey && previous.has(normalized.id)) normalized.apiKey = previous.get(normalized.id)?.apiKey || "";
+          return { ...normalized, updatedAt: stamp };
+        })
+        .filter((provider) => provider.name && provider.baseUrl);
+      const defaultProvider = next.ai.customProviders.find((provider) => provider.isDefault && provider.enabled);
+      next.ai.customProviders = next.ai.customProviders.map((provider) => ({ ...provider, isDefault: defaultProvider?.id === provider.id }));
+      if (defaultProvider) {
+        next.ai.provider = defaultProvider.id;
+        next.ai.model = defaultProvider.model || next.ai.model;
+      }
     }
     next.ai.updatedAt = stamp;
   }
@@ -608,6 +679,19 @@ function getProviderConfig() {
   const requested = String(systemConfig.ai.provider || process.env.AI_PROVIDER || "").toLowerCase();
   const enabled = systemConfig.ai.enabled !== false;
   if (!enabled) return { provider: "mock", apiKey: "", endpoint: "", model: "mock", enabled: false, configured: false };
+  const custom = findCustomProvider(systemConfig, requested);
+  if (custom) {
+    return {
+      provider: custom.name,
+      providerId: custom.id,
+      apiKey: custom.apiKey || "",
+      endpoint: normalizeChatCompletionsEndpoint(custom.baseUrl),
+      model: custom.model || systemConfig.ai.model || "custom-model",
+      interfaceType: custom.interfaceType,
+      enabled: custom.enabled,
+      configured: Boolean(custom.enabled && custom.apiKey && custom.baseUrl && custom.model),
+    };
+  }
   if (requested === "deepseek") {
     const apiKey = systemConfig.ai.deepseekApiKey || process.env.DEEPSEEK_API_KEY || "";
     return {
@@ -651,6 +735,67 @@ function getProviderConfig() {
     };
   }
   return { provider: "mock", apiKey: "", endpoint: "", model: "mock", enabled: true, configured: true };
+}
+
+function normalizeChatCompletionsEndpoint(baseUrl = "") {
+  const trimmed = String(baseUrl || "").trim().replace(/\/+$/, "");
+  if (!trimmed) return "";
+  if (/\/chat\/completions$/i.test(trimmed)) return trimmed;
+  if (/\/v1$/i.test(trimmed)) return `${trimmed}/chat/completions`;
+  return `${trimmed}/v1/chat/completions`;
+}
+
+function classifyProviderTestError(error) {
+  if (error?.name === "AbortError") return "网络无法访问或连接超时，请检查 API Base URL。";
+  const message = error instanceof Error ? error.message : String(error || "连接测试失败。");
+  if (/401|403|unauthorized|forbidden|invalid api key/i.test(message)) return `API Key 错误或无权限：${message}`;
+  if (/404|model.*not.*found|model_not_found|does not exist/i.test(message)) return `Model 不存在或 Base URL 路径不正确：${message}`;
+  if (/ENOTFOUND|ECONNREFUSED|fetch failed|network/i.test(message)) return `网络无法访问或 Base URL 错误：${message}`;
+  if (/message\.content|choices|json|format/i.test(message)) return `返回格式不兼容：${message}`;
+  return message;
+}
+
+async function testProviderConnection(provider) {
+  const normalized = normalizeCustomProvider(provider);
+  if (!normalized.baseUrl) throw new Error("API Base URL 不能为空。");
+  if (!normalized.model) throw new Error("Model 名称不能为空。");
+  if (!normalized.apiKey) throw new Error("API Key 未配置。");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Number(process.env.AI_TEST_TIMEOUT_MS || 20000));
+  try {
+    const response = await fetch(normalizeChatCompletionsEndpoint(normalized.baseUrl), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${normalized.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: normalized.model,
+        messages: [
+          { role: "system", content: "Return a short JSON object only." },
+          { role: "user", content: "ping" },
+        ],
+        temperature: 0,
+        max_tokens: 32,
+      }),
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    if (!response.ok) throw new Error(`模型接口返回 ${response.status}: ${text.slice(0, 260)}`);
+    let payload = {};
+    try {
+      payload = text ? JSON.parse(text) : {};
+    } catch {
+      throw new Error(`返回格式不是 JSON：${text.slice(0, 160)}`);
+    }
+    const content = payload?.choices?.[0]?.message?.content;
+    if (!content) throw new Error("返回格式不兼容：缺少 choices[0].message.content。");
+    return { ok: true, message: "连接成功，模型可用。", testedAt: nowIso() };
+  } catch (error) {
+    return { ok: false, message: classifyProviderTestError(error), testedAt: nowIso() };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function getSearchConfig() {
@@ -1315,6 +1460,38 @@ async function route(req, res) {
       recordActivity(db, { user: admin, workspaceId: ADMIN_PUBLIC_WORKSPACE_ID, actionType: "settings", targetType: "system_config", targetId: "system-config", detail: "管理员更新 AI 与系统配置", req });
       saveDb(db);
       jsonResponse(res, 200, { config: configSummary(nextConfig) });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/admin/config/test-provider") {
+      const db = readDb();
+      const admin = userFromRequest(req, db);
+      if (admin.role !== "admin" || admin.canAccessAdminPanel === false) {
+        jsonResponse(res, 403, { error: "只有管理员可以测试自定义 AI Provider。" });
+        return;
+      }
+      const currentConfig = readSystemConfig();
+      const providerPayload = payload.provider ?? payload;
+      const existing = providerPayload.id ? findCustomProvider(currentConfig, providerPayload.id) : null;
+      const provider = normalizeCustomProvider({ ...(existing ?? {}), ...providerPayload });
+      const result = await testProviderConnection(provider);
+      if (provider.id && provider.name && provider.baseUrl && provider.model) {
+        const stamp = result.testedAt;
+        const providers = [...(currentConfig.ai.customProviders ?? [])];
+        const index = providers.findIndex((item) => item.id === provider.id);
+        const nextProvider = {
+          ...(index >= 0 ? providers[index] : provider),
+          ...provider,
+          lastTestedAt: stamp,
+          lastTestOk: result.ok,
+          lastTestMessage: result.message,
+          updatedAt: stamp,
+        };
+        if (index >= 0) providers[index] = nextProvider;
+        else providers.push(nextProvider);
+        const nextConfig = applySystemConfigPatch(currentConfig, { ai: { customProviders: providers } });
+        saveSystemConfig(nextConfig);
+      }
+      jsonResponse(res, 200, { result, config: configSummary(readSystemConfig()) });
       return;
     }
     if (req.method === "PATCH") {

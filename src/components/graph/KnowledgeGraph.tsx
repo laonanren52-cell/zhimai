@@ -3,7 +3,7 @@ import { DataSet } from "vis-data/peer/esm/vis-data";
 import { Network } from "vis-network/standalone/esm/vis-network";
 import "vis-network/styles/vis-network.css";
 import { nodeTypeMeta } from "../../data/mockGraphData";
-import type { GraphData, GraphNode } from "../../types/graph";
+import type { GraphData, GraphEdge, GraphLayoutMode, GraphNode } from "../../types/graph";
 import { getNeighborIds, searchNodes } from "../../utils/graphUtils";
 import GraphLegend from "./GraphLegend";
 
@@ -82,6 +82,18 @@ interface KnowledgeGraphProps {
   onSearchMiss: (query: string) => void;
   onSwitchLocal: (nodeId: string) => void;
   onDeleteNode?: (node: GraphNode) => void;
+  canEdit?: boolean;
+  graphLayoutMode?: GraphLayoutMode;
+  relationEditMode?: boolean;
+  relationStartNodeId?: string | null;
+  selectedEdgeId?: string | null;
+  onSelectEdge?: (edge: GraphEdge | null) => void;
+  onRelationNodeClick?: (node: GraphNode) => void;
+  onEditEdge?: (edge: GraphEdge) => void;
+  onDeleteEdge?: (edge: GraphEdge) => void;
+  onToggleNodeFixed?: (node: GraphNode, fixed: boolean) => void;
+  onUpdateNodePositions?: (positions: Array<{ id: string; x: number; y: number; fixed?: boolean; layoutMode?: GraphLayoutMode }>) => void;
+  layoutCommand?: { type: "save" | "center"; version: number } | null;
 }
 
 function colorWithAlpha(hex: string, alpha: number) {
@@ -121,13 +133,14 @@ function toVisNode(
   dimmed = false,
   includePosition = true,
   visual: VisualOptions = {},
+  searchHit = false,
 ): VisNodeItem {
   const meta = nodeTypeMeta[node.type];
   const nodeColor = resolveCssColor(meta.color);
   const nodeGlow = resolveCssColor(meta.glow);
   const opacity = visual.opacity ?? (dimmed ? 0.26 : 0.92);
   const shadowScale = visual.shadowScale ?? 1;
-  const labelVisible = selected || isImportantNode(node);
+  const labelVisible = selected || searchHit || node.isRoot || isImportantNode(node);
   const background = dimmed ? colorWithAlpha("var(--text-faint)", opacity) : colorWithAlpha(nodeColor, opacity);
   const sizeDelta = visual.sizeDelta ?? 0;
 
@@ -159,6 +172,7 @@ function toVisNode(
       x: 0,
       y: 0,
     },
+    fixed: node.fixed ? { x: true, y: true } : false,
   };
 }
 
@@ -168,14 +182,15 @@ function toVisEdge(
   dimmed = false,
   opacityScale = 1,
 ): VisEdgeItem {
-  const baseAlpha = highlighted ? 0.88 : dimmed ? 0.14 : 0.34;
-  const edgeColor = highlighted ? "var(--accent)" : dimmed ? "var(--text-faint)" : "var(--text-muted)";
+  const manual = Boolean(edge.isManual);
+  const baseAlpha = highlighted ? 0.88 : dimmed ? 0.14 : manual ? 0.52 : 0.34;
+  const edgeColor = highlighted ? "var(--accent)" : dimmed ? "var(--text-faint)" : manual ? "var(--accent-strong)" : "var(--text-muted)";
   return {
     id: edge.id,
     from: edge.from,
     to: edge.to,
     label: undefined,
-    width: highlighted ? 1.5 : dimmed ? 0.18 : Math.max(0.45, edge.weight ?? 0.55),
+    width: highlighted ? 1.8 : dimmed ? 0.18 : Math.max(manual ? 0.9 : 0.45, edge.weight ?? 0.55),
     color: {
       color: colorWithAlpha(edgeColor, baseAlpha * opacityScale),
       highlight: colorWithAlpha("var(--accent)", 0.95),
@@ -196,8 +211,20 @@ export default function KnowledgeGraph({
   onSearchMiss,
   onSwitchLocal,
   onDeleteNode,
+  canEdit = false,
+  graphLayoutMode = "stable",
+  relationEditMode = false,
+  relationStartNodeId = null,
+  selectedEdgeId = null,
+  onSelectEdge,
+  onRelationNodeClick,
+  onEditEdge,
+  onDeleteEdge,
+  onToggleNodeFixed,
+  onUpdateNodePositions,
+  layoutCommand,
 }: KnowledgeGraphProps) {
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: GraphNode } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node?: GraphNode; edge?: GraphEdge } | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const backgroundCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -205,12 +232,23 @@ export default function KnowledgeGraph({
   const nodesRef = useRef<DataSet<VisNodeItem> | null>(null);
   const edgesRef = useRef<DataSet<VisEdgeItem> | null>(null);
   const selectedRef = useRef<string | null>(selectedNodeId);
+  const selectedEdgeRef = useRef<string | null>(selectedEdgeId);
+  const searchQueryRef = useRef(searchQuery);
   const graphDataRef = useRef<GraphData>(data);
   const nodeMapRef = useRef<Map<string, GraphNode>>(new Map(data.nodes.map((node) => [node.id, node])));
+  const edgeMapRef = useRef<Map<string, GraphEdge>>(new Map(data.edges.map((edge) => [edge.id, edge])));
   const onSelectNodeRef = useRef(onSelectNode);
   const onSearchMissRef = useRef(onSearchMiss);
   const onSwitchLocalRef = useRef(onSwitchLocal);
   const onDeleteNodeRef = useRef(onDeleteNode);
+  const onSelectEdgeRef = useRef(onSelectEdge);
+  const onRelationNodeClickRef = useRef(onRelationNodeClick);
+  const onEditEdgeRef = useRef(onEditEdge);
+  const onDeleteEdgeRef = useRef(onDeleteEdge);
+  const onToggleNodeFixedRef = useRef(onToggleNodeFixed);
+  const onUpdateNodePositionsRef = useRef(onUpdateNodePositions);
+  const graphLayoutModeRef = useRef<GraphLayoutMode>(graphLayoutMode);
+  const relationEditModeRef = useRef(relationEditMode);
   const firstDataSyncRef = useRef(true);
   const hoverFrameRef = useRef<number | null>(null);
   const visualFrameRef = useRef<number | null>(null);
@@ -225,6 +263,7 @@ export default function KnowledgeGraph({
   const starParticlesRef = useRef<StarParticle[]>([]);
   const ripplesRef = useRef<SearchRipple[]>([]);
   const draggingNodeRef = useRef<string | null>(null);
+  const positionSaveTimerRef = useRef<number | null>(null);
 
   function clearTimer(ref: React.MutableRefObject<number | null>) {
     if (ref.current !== null) {
@@ -250,6 +289,10 @@ export default function KnowledgeGraph({
   function enableInteractivePhysics() {
     const network = networkRef.current;
     if (!network) return;
+    if (graphLayoutModeRef.current === "free" || graphLayoutModeRef.current === "stable") {
+      freezePhysics();
+      return;
+    }
     clearTimer(stabilizeTimerRef);
     clearTimer(settleTimerRef);
     network.setOptions({
@@ -310,6 +353,10 @@ export default function KnowledgeGraph({
   function stabilizeBriefly(iterations = 70) {
     const network = networkRef.current;
     if (!network) return;
+    if (graphLayoutModeRef.current === "free" || graphLayoutModeRef.current === "stable") {
+      freezePhysics();
+      return;
+    }
     clearTimer(stabilizeTimerRef);
     network.setOptions({ physics: true });
     network.stabilize(iterations);
@@ -344,7 +391,18 @@ export default function KnowledgeGraph({
   function releaseLocalPhysicsPins() {
     const nodes = nodesRef.current;
     if (!nodes) return;
-    nodes.update(graphDataRef.current.nodes.map((node) => ({ id: node.id, fixed: false })));
+    nodes.update(graphDataRef.current.nodes.map((node) => ({ id: node.id, fixed: node.fixed ? { x: true, y: true } : false })));
+  }
+
+  function schedulePositionSave(nodeId: string) {
+    const network = networkRef.current;
+    if (!network || !onUpdateNodePositionsRef.current) return;
+    const position = network.getPositions([nodeId])[nodeId];
+    if (!position) return;
+    clearTimer(positionSaveTimerRef);
+    positionSaveTimerRef.current = window.setTimeout(() => {
+      onUpdateNodePositionsRef.current?.([{ id: nodeId, x: position.x, y: position.y, fixed: true, layoutMode: "free" }]);
+    }, 420);
   }
 
   function resizeCanvas(canvas: HTMLCanvasElement, width: number, height: number, dpr: number) {
@@ -594,26 +652,28 @@ export default function KnowledgeGraph({
     const activeNodeVisible = activeId ? nodes.get(activeId) : null;
 
     if (!activeId || !activeNodeVisible) {
-      nodes.update(graphData.nodes.map((node) => toVisNode(node, false, false, false)));
-      edges.update(graphData.edges.map((edge) => toVisEdge(edge)));
+      const searchHits = new Set(searchNodes(graphData.nodes, searchQueryRef.current.trim()).map((node) => node.id));
+      nodes.update(graphData.nodes.map((node) => toVisNode(node, false, false, false, {}, searchHits.has(node.id))));
+      edges.update(graphData.edges.map((edge) => toVisEdge(edge, edge.id === selectedEdgeRef.current)));
       return;
     }
 
     const neighbors = getNeighborIds(activeId, graphData.edges);
     const relatedIds = new Set<string>([activeId, ...neighbors]);
+    const searchHits = new Set(searchNodes(graphData.nodes, searchQueryRef.current.trim()).map((node) => node.id));
     nodes.update(
       graphData.nodes.map((node) =>
         toVisNode(node, node.id === activeId, !relatedIds.has(node.id), false, {
           sizeDelta: node.id === activeId ? 0.8 : 0,
           shadowScale: node.id === activeId ? 1.35 : 1,
-        }),
+        }, searchHits.has(node.id)),
       ),
     );
     edges.update(
       graphData.edges.map((edge) =>
         toVisEdge(
           edge,
-          edge.from === activeId || edge.to === activeId,
+          edge.id === selectedEdgeRef.current || edge.from === activeId || edge.to === activeId,
           !(relatedIds.has(edge.from) && relatedIds.has(edge.to)),
         ),
       ),
@@ -675,6 +735,66 @@ export default function KnowledgeGraph({
   }, [onDeleteNode]);
 
   useEffect(() => {
+    onSelectEdgeRef.current = onSelectEdge;
+  }, [onSelectEdge]);
+
+  useEffect(() => {
+    onRelationNodeClickRef.current = onRelationNodeClick;
+  }, [onRelationNodeClick]);
+
+  useEffect(() => {
+    onEditEdgeRef.current = onEditEdge;
+  }, [onEditEdge]);
+
+  useEffect(() => {
+    onDeleteEdgeRef.current = onDeleteEdge;
+  }, [onDeleteEdge]);
+
+  useEffect(() => {
+    onToggleNodeFixedRef.current = onToggleNodeFixed;
+  }, [onToggleNodeFixed]);
+
+  useEffect(() => {
+    onUpdateNodePositionsRef.current = onUpdateNodePositions;
+  }, [onUpdateNodePositions]);
+
+  useEffect(() => {
+    graphLayoutModeRef.current = graphLayoutMode;
+    if (graphLayoutMode === "free" || graphLayoutMode === "stable") freezePhysics();
+    else stabilizeBriefly(60);
+  }, [graphLayoutMode]);
+
+  useEffect(() => {
+    relationEditModeRef.current = relationEditMode;
+  }, [relationEditMode]);
+
+  useEffect(() => {
+    selectedEdgeRef.current = selectedEdgeId;
+    paintGraph(selectedRef.current);
+  }, [selectedEdgeId]);
+
+  useEffect(() => {
+    searchQueryRef.current = searchQuery;
+  }, [searchQuery]);
+
+  useEffect(() => {
+    if (!layoutCommand || !networkRef.current) return;
+    if (layoutCommand.type === "center") {
+      scheduleFit(20);
+      return;
+    }
+    if (layoutCommand.type === "save" && onUpdateNodePositionsRef.current) {
+      const ids = graphDataRef.current.nodes.map((node) => node.id);
+      const positions = networkRef.current.getPositions(ids);
+      onUpdateNodePositionsRef.current(
+        ids
+          .map((id) => positions[id] ? { id, x: positions[id].x, y: positions[id].y, fixed: true, layoutMode: "free" as GraphLayoutMode } : null)
+          .filter((item): item is { id: string; x: number; y: number; fixed: boolean; layoutMode: GraphLayoutMode } => Boolean(item)),
+      );
+    }
+  }, [layoutCommand?.version]);
+
+  useEffect(() => {
     if (!containerRef.current || networkRef.current) return;
 
     const initialData = graphDataRef.current;
@@ -700,7 +820,7 @@ export default function KnowledgeGraph({
           randomSeed: 13,
         },
         physics: {
-          enabled: true,
+          enabled: graphLayoutModeRef.current === "auto",
           solver: "forceAtlas2Based",
           forceAtlas2Based: {
             gravitationalConstant: -45,
@@ -735,7 +855,7 @@ export default function KnowledgeGraph({
         },
         interaction: {
           hover: true,
-          dragNodes: true,
+          dragNodes: canEdit,
           dragView: true,
           zoomView: true,
           multiselect: false,
@@ -761,6 +881,7 @@ export default function KnowledgeGraph({
     });
 
     network.on("dragStart", (params) => {
+      if (!canEdit) return;
       const id = params.nodes?.[0] ? String(params.nodes[0]) : null;
       if (!id) return;
       draggingNodeRef.current = id;
@@ -782,6 +903,7 @@ export default function KnowledgeGraph({
       const id = params.nodes?.[0] ? String(params.nodes[0]) : draggingNodeRef.current;
       if (!id) return;
       draggingNodeRef.current = id;
+      schedulePositionSave(id);
       paintGraph(id);
       settleAfterDrag(1200);
       clearTimer(dragHighlightTimerRef);
@@ -797,10 +919,23 @@ export default function KnowledgeGraph({
     network.on("click", (params) => {
       setContextMenu(null);
       const id = params.nodes?.[0] ? String(params.nodes[0]) : null;
+      const edgeId = !id && params.edges?.[0] ? String(params.edges[0]) : null;
+      if (edgeId) {
+        const edge = edgeMapRef.current.get(edgeId) ?? null;
+        selectedEdgeRef.current = edgeId;
+        onSelectEdgeRef.current?.(edge);
+        onSelectNodeRef.current(null);
+        paintGraph(selectedRef.current);
+        return;
+      }
       selectedRef.current = id;
-      onSelectNodeRef.current(id ? (nodeMapRef.current.get(id) ?? null) : null);
+      selectedEdgeRef.current = null;
+      onSelectEdgeRef.current?.(null);
+      const node = id ? (nodeMapRef.current.get(id) ?? null) : null;
+      onSelectNodeRef.current(node);
       paintGraph(id);
-      if (id) {
+      if (id && node) {
+        if (relationEditModeRef.current && canEdit) onRelationNodeClickRef.current?.(node);
         addRipple(id);
       }
     });
@@ -808,6 +943,16 @@ export default function KnowledgeGraph({
     network.on("oncontext", (params) => {
       params.event.preventDefault();
       const nodeId = network.getNodeAt(params.pointer.DOM);
+      const edgeId = network.getEdgeAt(params.pointer.DOM);
+      if (!nodeId && edgeId) {
+        const edge = edgeMapRef.current.get(String(edgeId));
+        if (!edge) return;
+        selectedEdgeRef.current = edge.id;
+        onSelectEdgeRef.current?.(edge);
+        paintGraph(selectedRef.current);
+        setContextMenu({ x: params.pointer.DOM.x, y: params.pointer.DOM.y, edge });
+        return;
+      }
       if (!nodeId) {
         setContextMenu(null);
         return;
@@ -835,6 +980,14 @@ export default function KnowledgeGraph({
       revealGraph(720);
     });
 
+    if (graphLayoutModeRef.current !== "auto") {
+      window.setTimeout(() => {
+        freezePhysics();
+        scheduleFit(80);
+        revealGraph(520);
+      }, 120);
+    }
+
     network.on("stabilized", () => {
       if (draggingNodeRef.current || settleTimerRef.current !== null) return;
       freezePhysics();
@@ -858,6 +1011,7 @@ export default function KnowledgeGraph({
       clearTimer(stabilizeTimerRef);
       clearTimer(settleTimerRef);
       clearTimer(dragHighlightTimerRef);
+      clearTimer(positionSaveTimerRef);
       clearTimer(fitTimerRef);
       clearTimer(resizeTimerRef);
       resizeObserverRef.current?.disconnect();
@@ -876,6 +1030,7 @@ export default function KnowledgeGraph({
       firstDataSyncRef.current = false;
       graphDataRef.current = data;
       nodeMapRef.current = new Map(data.nodes.map((node) => [node.id, node]));
+      edgeMapRef.current = new Map(data.edges.map((edge) => [edge.id, edge]));
       return;
     }
 
@@ -883,6 +1038,7 @@ export default function KnowledgeGraph({
     fadeGraphOut(previousData, () => {
       graphDataRef.current = data;
       nodeMapRef.current = new Map(data.nodes.map((node) => [node.id, node]));
+      edgeMapRef.current = new Map(data.edges.map((edge) => [edge.id, edge]));
       syncDataSets(data, true);
       stabilizeBriefly(70);
       window.setTimeout(() => revealGraph(520), 520);
@@ -939,36 +1095,105 @@ export default function KnowledgeGraph({
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onContextMenu={(event) => event.preventDefault()}
         >
-          <button
-            type="button"
-            onClick={() => {
-              onSelectNode(contextMenu.node);
-              setContextMenu(null);
-            }}
-            className="w-full rounded-xl px-3 py-2 text-left text-[var(--text-secondary)] transition hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
-          >
-            查看详情
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              onSwitchLocal(contextMenu.node.id);
-              setContextMenu(null);
-            }}
-            className="w-full rounded-xl px-3 py-2 text-left text-[var(--text-secondary)] transition hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
-          >
-            高亮关联
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              onDeleteNodeRef.current?.(contextMenu.node);
-              setContextMenu(null);
-            }}
-            className="w-full rounded-xl px-3 py-2 text-left text-[var(--danger)] transition hover:bg-[var(--danger-bg)]"
-          >
-            删除节点
-          </button>
+          {contextMenu.node && (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  onSelectNode(contextMenu.node ?? null);
+                  setContextMenu(null);
+                }}
+                className="w-full rounded-xl px-3 py-2 text-left text-[var(--text-secondary)] transition hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+              >
+                查看详情
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (contextMenu.node) onRelationNodeClickRef.current?.(contextMenu.node);
+                  setContextMenu(null);
+                }}
+                className="w-full rounded-xl px-3 py-2 text-left text-[var(--text-secondary)] transition hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+              >
+                {relationStartNodeId ? "连接到选中节点" : "创建关联"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (contextMenu.node) onSwitchLocal(contextMenu.node.id);
+                  setContextMenu(null);
+                }}
+                className="w-full rounded-xl px-3 py-2 text-left text-[var(--text-secondary)] transition hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+              >
+                查看相关节点
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (contextMenu.node) {
+                    const position = networkRef.current?.getPositions([contextMenu.node.id])[contextMenu.node.id];
+                    if (position && onUpdateNodePositionsRef.current) {
+                      onUpdateNodePositionsRef.current([{ id: contextMenu.node.id, x: position.x, y: position.y, fixed: !contextMenu.node.fixed, layoutMode: !contextMenu.node.fixed ? "free" : graphLayoutModeRef.current }]);
+                    } else {
+                      onToggleNodeFixedRef.current?.(contextMenu.node, !contextMenu.node.fixed);
+                    }
+                  }
+                  setContextMenu(null);
+                }}
+                className="w-full rounded-xl px-3 py-2 text-left text-[var(--text-secondary)] transition hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+              >
+                {contextMenu.node.fixed ? "取消固定" : "固定位置"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (contextMenu.node) onDeleteNodeRef.current?.(contextMenu.node);
+                  setContextMenu(null);
+                }}
+                className="w-full rounded-xl px-3 py-2 text-left text-[var(--danger)] transition hover:bg-[var(--danger-bg)]"
+              >
+                删除节点
+              </button>
+            </>
+          )}
+          {contextMenu.edge && (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  if (contextMenu.edge) onEditEdgeRef.current?.(contextMenu.edge);
+                  setContextMenu(null);
+                }}
+                className="w-full rounded-xl px-3 py-2 text-left text-[var(--text-secondary)] transition hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+              >
+                编辑关系
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (contextMenu.edge) {
+                    onSelectEdgeRef.current?.(contextMenu.edge);
+                    selectedRef.current = contextMenu.edge.from;
+                    onSwitchLocal(contextMenu.edge.from);
+                  }
+                  setContextMenu(null);
+                }}
+                className="w-full rounded-xl px-3 py-2 text-left text-[var(--text-secondary)] transition hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+              >
+                高亮两端节点
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (contextMenu.edge) onDeleteEdgeRef.current?.(contextMenu.edge);
+                  setContextMenu(null);
+                }}
+                className="w-full rounded-xl px-3 py-2 text-left text-[var(--danger)] transition hover:bg-[var(--danger-bg)]"
+              >
+                删除关系
+              </button>
+            </>
+          )}
         </div>
       )}
       {data.nodes.length === 0 && (
@@ -984,7 +1209,7 @@ export default function KnowledgeGraph({
       )}
       <GraphLegend />
       <div className="graph-corner-note pointer-events-none absolute right-5 top-5 z-20 rounded-2xl border border-[var(--border-subtle)] px-4 py-3 text-xs text-[var(--text-muted)] backdrop-blur-xl">
-        稳定布局 · 动态光效 · 双击局部图谱
+        {relationEditMode ? "关系编辑模式 · 依次点击两个节点" : `${graphLayoutMode === "free" ? "自由布局" : graphLayoutMode === "auto" ? "自动布局" : "稳定布局"} · 动态光效 · 双击局部图谱`}
       </div>
     </div>
   );

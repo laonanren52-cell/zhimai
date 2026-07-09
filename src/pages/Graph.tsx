@@ -8,17 +8,44 @@ import { useAuthStore } from "../store/authStore";
 import { useAiStatus } from "../store/aiStatusStore";
 import { useKnowledgeStore } from "../store/knowledgeStore";
 import type { KnowledgeDocument, ParsedDocument } from "../types/document";
-import type { GraphNode, GraphNodeType, SourceReference } from "../types/graph";
+import type { GraphEdge, GraphLayoutMode, GraphNode, GraphNodeType, GraphRelationType, SourceReference } from "../types/graph";
 import { getConnectedEdges, getNeighborIds, getNodeById, searchGraphNodes } from "../utils/graphUtils";
 
 const allTypes: GraphNodeType[] = ["project", "document", "tech", "problem", "output", "tag", "concept"];
+const relationOptions: Array<[GraphRelationType, string]> = [
+  ["related_to", "相关"],
+  ["belongs_to", "包含"],
+  ["uses", "使用"],
+  ["depends_on", "依赖"],
+  ["solves", "解决"],
+  ["generates", "生成"],
+  ["proves", "证明"],
+  ["references", "引用"],
+  ["custom", "自定义"],
+];
 
 interface GraphProps {
   onOpenAssistant: () => void;
 }
 
 export default function Graph({ onOpenAssistant }: GraphProps) {
-  const { state, deleteNode, deleteDocument, clearGraph, setCopilotContext, replaceDocumentAnalysis, canEditCurrentWorkspace, currentWorkspace } = useKnowledgeStore();
+  const {
+    state,
+    createNode,
+    updateNode,
+    deleteNode,
+    upsertEdge,
+    deleteEdge,
+    updateNodePositions,
+    setNodesFixed,
+    resetLayout,
+    deleteDocument,
+    clearGraph,
+    setCopilotContext,
+    replaceDocumentAnalysis,
+    canEditCurrentWorkspace,
+    currentWorkspace,
+  } = useKnowledgeStore();
   const { markAiSuccess, markAiFailure } = useAiStatus();
   const { publishWorkspace } = useAuthStore();
   const [activeTypes, setActiveTypes] = useState<GraphNodeType[]>(allTypes);
@@ -30,6 +57,13 @@ export default function Graph({ onOpenAssistant }: GraphProps) {
   const [generatedToast, setGeneratedToast] = useState<string | null>(null);
   const [quickFilter, setQuickFilter] = useState<"recent" | "selectedDocument" | "outputs" | "problems" | null>(null);
   const [focusRequest, setFocusRequest] = useState<{ nodeId: string; version: number } | null>(null);
+  const [selectedEdge, setSelectedEdge] = useState<GraphEdge | null>(null);
+  const [relationEditMode, setRelationEditMode] = useState(false);
+  const [relationStartNode, setRelationStartNode] = useState<GraphNode | null>(null);
+  const [relationDraft, setRelationDraft] = useState<{ edge?: GraphEdge; from?: GraphNode; to?: GraphNode; relationType: GraphRelationType; label: string; description: string; isBidirectional: boolean } | null>(null);
+  const [nodeDraft, setNodeDraft] = useState<Partial<GraphNode> | null>(null);
+  const [layoutMode, setLayoutMode] = useState<GraphLayoutMode>("stable");
+  const [layoutCommand, setLayoutCommand] = useState<{ type: "save" | "center"; version: number } | null>(null);
 
   const baseGraph = state.graph;
   const selectedDocumentIdForFilter = quickFilter === "selectedDocument" ? selectedNode?.sourceDocumentIds?.[0] : undefined;
@@ -65,6 +99,12 @@ export default function Graph({ onOpenAssistant }: GraphProps) {
     if (!selectedNode) return;
     if (!baseGraph.nodes.some((node) => node.id === selectedNode.id)) setSelectedNode(null);
   }, [baseGraph.nodes, selectedNode]);
+
+  useEffect(() => {
+    if (!selectedEdge) return;
+    const nextEdge = baseGraph.edges.find((edge) => edge.id === selectedEdge.id) ?? null;
+    setSelectedEdge(nextEdge);
+  }, [baseGraph.edges, selectedEdge?.id]);
 
   useEffect(() => {
     if (!search.trim()) return;
@@ -103,8 +143,167 @@ export default function Graph({ onOpenAssistant }: GraphProps) {
     if (!node) return;
     if (!activeTypes.includes(node.type)) setActiveTypes((current) => [...new Set([...current, node.type])]);
     setSelectedNode(node);
+    setSelectedEdge(null);
     setSearchError(null);
     setFocusRequest({ nodeId, version: Date.now() });
+  }
+
+  function handleRelationNodeClick(node: GraphNode) {
+    if (!canEditCurrentWorkspace) return;
+    if (!relationEditMode) setRelationEditMode(true);
+    if (!relationStartNode) {
+      setRelationStartNode(node);
+      setGeneratedToast(`已选择起点「${node.label}」，请点击终点节点。`);
+      window.setTimeout(() => setGeneratedToast(null), 2200);
+      return;
+    }
+    if (relationStartNode.id === node.id) {
+      setGeneratedToast("起点和终点不能是同一个节点。");
+      window.setTimeout(() => setGeneratedToast(null), 2200);
+      return;
+    }
+    setRelationDraft({ from: relationStartNode, to: node, relationType: "related_to", label: "相关", description: "", isBidirectional: false });
+    setRelationStartNode(null);
+  }
+
+  function saveRelationDraft() {
+    if (!relationDraft) return;
+    const from = relationDraft.from ?? baseGraph.nodes.find((node) => node.id === relationDraft.edge?.from);
+    const to = relationDraft.to ?? baseGraph.nodes.find((node) => node.id === relationDraft.edge?.to);
+    if (!from || !to) return;
+    const stamp = new Date().toISOString();
+    const edge: GraphEdge = {
+      id: relationDraft.edge?.id ?? `manual-edge-${from.id}-${to.id}-${Date.now()}`.replace(/[^a-zA-Z0-9-]/g, "-"),
+      workspaceId: state.workspaceId,
+      from: from.id,
+      to: to.id,
+      relationType: relationDraft.relationType,
+      label: relationDraft.label.trim() || relationOptions.find(([type]) => type === relationDraft.relationType)?.[1] || "相关",
+      description: relationDraft.description.trim(),
+      evidence: relationDraft.description.trim(),
+      isBidirectional: relationDraft.isBidirectional,
+      isManual: true,
+      confidence: 1,
+      createdBy: relationDraft.edge?.createdBy ?? "user",
+      createdAt: relationDraft.edge?.createdAt ?? stamp,
+      updatedAt: stamp,
+      weight: relationDraft.edge?.weight ?? 0.9,
+    };
+    upsertEdge(edge);
+    if (edge.isBidirectional) {
+      upsertEdge({ ...edge, id: `${edge.id}-reverse`, from: edge.to, to: edge.from });
+    }
+    setSelectedEdge(edge);
+    setRelationDraft(null);
+    setRelationEditMode(false);
+    setGeneratedToast("关系已保存。");
+    window.setTimeout(() => setGeneratedToast(null), 2200);
+  }
+
+  function editEdge(edge: GraphEdge) {
+    const from = baseGraph.nodes.find((node) => node.id === edge.from);
+    const to = baseGraph.nodes.find((node) => node.id === edge.to);
+    setRelationDraft({
+      edge,
+      from,
+      to,
+      relationType: edge.relationType,
+      label: edge.label ?? relationOptions.find(([type]) => type === edge.relationType)?.[1] ?? "相关",
+      description: edge.description ?? edge.evidence ?? "",
+      isBidirectional: Boolean(edge.isBidirectional),
+    });
+  }
+
+  function handleDeleteEdge(edge: GraphEdge) {
+    if (!canEditCurrentWorkspace) {
+      window.alert("你当前只有查看权限，不能修改管理员共享星图。");
+      return;
+    }
+    if (!window.confirm(`确认删除关系「${edge.label ?? edge.relationType}」吗？`)) return;
+    deleteEdge(edge.id);
+    if (selectedEdge?.id === edge.id) setSelectedEdge(null);
+    setGeneratedToast("关系已删除。");
+    window.setTimeout(() => setGeneratedToast(null), 2200);
+  }
+
+  function openNewNodeForm() {
+    setNodeDraft({
+      label: "",
+      type: "concept",
+      description: "",
+      tags: [],
+      sourceNote: "",
+      isRoot: false,
+    });
+  }
+
+  function openEditNodeForm(node: GraphNode) {
+    setNodeDraft({ ...node, tags: node.tags ?? [] });
+  }
+
+  function saveNodeDraft() {
+    if (!nodeDraft?.label?.trim()) {
+      window.alert("请填写节点名称。");
+      return;
+    }
+    const id = nodeDraft.id || `manual-node-${Date.now()}`;
+    const node: GraphNode = {
+      id,
+      workspaceId: state.workspaceId,
+      label: nodeDraft.label.trim(),
+      type: nodeDraft.type ?? "concept",
+      group: nodeDraft.group || "manual",
+      cluster: nodeDraft.cluster || "manual",
+      description: nodeDraft.description || nodeDraft.userDescription || "",
+      tags: nodeDraft.tags ?? [],
+      sourceNote: nodeDraft.sourceNote,
+      isRoot: Boolean(nodeDraft.isRoot),
+      isManual: nodeDraft.isManual ?? true,
+      value: nodeDraft.isRoot ? 32 : nodeDraft.value ?? 12,
+      confidence: nodeDraft.confidence ?? 1,
+      x: nodeDraft.x,
+      y: nodeDraft.y,
+      fixed: nodeDraft.fixed,
+      layoutMode: nodeDraft.layoutMode,
+    };
+    if (nodeDraft.id) updateNode(nodeDraft.id, node);
+    else createNode(node);
+    setSelectedNode(node);
+    setNodeDraft(null);
+    setGeneratedToast(nodeDraft.id ? "节点已更新。" : "节点已创建。");
+    window.setTimeout(() => setGeneratedToast(null), 2200);
+  }
+
+  function handleLayoutAction(action: "save" | "restore" | "reset" | "fixAll" | "unfixAll" | "center") {
+    if (action === "center") {
+      setLayoutCommand({ type: "center", version: Date.now() });
+      return;
+    }
+    if (!canEditCurrentWorkspace) {
+      window.alert("你当前只有查看权限，不能保存布局。");
+      return;
+    }
+    if (action === "save") {
+      setLayoutCommand({ type: "save", version: Date.now() });
+      setGeneratedToast("当前布局已保存。");
+    }
+    if (action === "restore") setGeneratedToast("已使用最近一次保存的布局。");
+    if (action === "reset") {
+      if (!window.confirm("确认重置为自动布局吗？这会覆盖用户手动摆放的位置。")) return;
+      resetLayout();
+      setLayoutMode("auto");
+      setGeneratedToast("已重置为自动布局。");
+    }
+    if (action === "fixAll") {
+      setLayoutCommand({ type: "save", version: Date.now() });
+      setNodesFixed(undefined, true);
+      setGeneratedToast("已固定全部节点。");
+    }
+    if (action === "unfixAll") {
+      setNodesFixed(undefined, false);
+      setGeneratedToast("已取消全部固定。");
+    }
+    window.setTimeout(() => setGeneratedToast(null), 2200);
   }
 
   function handleQuickFilter(filter: "recent" | "selectedDocument" | "outputs" | "problems" | null) {
@@ -256,6 +455,43 @@ export default function Graph({ onOpenAssistant }: GraphProps) {
           <div className="liquid-action rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-4 py-2 text-sm text-[var(--accent)]">
             {baseGraph.nodes.length} 节点 · {baseGraph.edges.length} 关系 · {state.documents.length} 资料
           </div>
+          <select value={layoutMode} onChange={(event) => setLayoutMode(event.target.value as GraphLayoutMode)} className="input-shell rounded-full px-3 py-2 text-sm">
+            <option value="auto">自动布局</option>
+            <option value="stable">稳定布局</option>
+            <option value="free">自由布局</option>
+          </select>
+          <button
+            type="button"
+            onClick={() => {
+              setRelationEditMode((value) => !value);
+              setRelationStartNode(null);
+            }}
+            disabled={!canEditCurrentWorkspace}
+            className={relationEditMode ? "btn-primary px-3 py-2" : "btn-secondary px-3 py-2"}
+          >
+            {relationEditMode ? "关系编辑中" : "关系编辑模式"}
+          </button>
+          <button type="button" onClick={openNewNodeForm} disabled={!canEditCurrentWorkspace} className="btn-secondary px-3 py-2">
+            新建节点
+          </button>
+          <button type="button" onClick={() => handleLayoutAction("save")} disabled={!canEditCurrentWorkspace} className="btn-secondary px-3 py-2">
+            保存当前布局
+          </button>
+          <button type="button" onClick={() => handleLayoutAction("restore")} className="btn-secondary px-3 py-2">
+            恢复上次布局
+          </button>
+          <button type="button" onClick={() => handleLayoutAction("reset")} disabled={!canEditCurrentWorkspace} className="btn-secondary px-3 py-2">
+            重置自动布局
+          </button>
+          <button type="button" onClick={() => handleLayoutAction("fixAll")} disabled={!canEditCurrentWorkspace} className="btn-secondary px-3 py-2">
+            全部固定
+          </button>
+          <button type="button" onClick={() => handleLayoutAction("unfixAll")} disabled={!canEditCurrentWorkspace} className="btn-secondary px-3 py-2">
+            全部取消固定
+          </button>
+          <button type="button" onClick={() => handleLayoutAction("center")} className="btn-secondary px-3 py-2">
+            居中视图
+          </button>
           {canEditCurrentWorkspace && currentWorkspace?.type === "admin_public" ? (
             <button type="button" onClick={() => publishWorkspace("管理员发布了新的共享星图更新。")} className="btn-secondary">
               发布更新
@@ -308,11 +544,22 @@ export default function Graph({ onOpenAssistant }: GraphProps) {
         <KnowledgeGraph
           data={visibleGraph}
           selectedNodeId={selectedNode?.id ?? null}
+          selectedEdgeId={selectedEdge?.id ?? null}
           searchQuery={search}
           focusRequest={focusRequest}
+          canEdit={canEditCurrentWorkspace}
+          graphLayoutMode={layoutMode}
+          relationEditMode={relationEditMode}
+          relationStartNodeId={relationStartNode?.id ?? null}
+          layoutCommand={layoutCommand}
           onSelectNode={(node) => {
             setSelectedNode(node);
+            if (node) setSelectedEdge(null);
             setSearchError(null);
+          }}
+          onSelectEdge={(edge) => {
+            setSelectedEdge(edge);
+            if (edge) setSelectedNode(null);
           }}
           onSearchMiss={(query) => setSearchError(`未找到包含「${query}」的节点。`)}
           onSwitchLocal={(nodeId) => {
@@ -320,10 +567,22 @@ export default function Graph({ onOpenAssistant }: GraphProps) {
             setMode("local");
           }}
           onDeleteNode={handleDeleteGraphNode}
+          onRelationNodeClick={handleRelationNodeClick}
+          onEditEdge={editEdge}
+          onDeleteEdge={handleDeleteEdge}
+          onToggleNodeFixed={(node, fixed) => {
+            if (!canEditCurrentWorkspace) return;
+            updateNodePositions([{ id: node.id, x: node.x ?? 0, y: node.y ?? 0, fixed, layoutMode: fixed ? "free" : layoutMode }]);
+            setGeneratedToast(fixed ? "节点位置已固定。" : "节点已取消固定。");
+            window.setTimeout(() => setGeneratedToast(null), 1800);
+          }}
+          onUpdateNodePositions={updateNodePositions}
         />
         <NodeDetailPanel
           canEdit={canEditCurrentWorkspace}
           node={selectedNode}
+          selectedEdge={selectedEdge}
+          nodes={baseGraph.nodes}
           neighbors={neighbors}
           edges={connectedEdges}
           documents={state.documents}
@@ -335,15 +594,131 @@ export default function Graph({ onOpenAssistant }: GraphProps) {
             window.setTimeout(() => setGeneratedToast(null), 1800);
           }}
           onAskNode={openCopilot}
+          onEditNode={() => selectedNode && openEditNodeForm(selectedNode)}
           onDeleteNode={handleDeleteNode}
+          onEditEdge={editEdge}
+          onDeleteEdge={handleDeleteEdge}
           onReanalyzeDocument={(documentId) => void handleReanalyzeDocument(documentId)}
         />
       </div>
+      {relationDraft && (
+        <RelationEditor
+          draft={relationDraft}
+          onChange={setRelationDraft}
+          onCancel={() => setRelationDraft(null)}
+          onSave={saveRelationDraft}
+        />
+      )}
+      {nodeDraft && (
+        <NodeEditor
+          draft={nodeDraft}
+          onChange={setNodeDraft}
+          onCancel={() => setNodeDraft(null)}
+          onSave={saveNodeDraft}
+        />
+      )}
       {generatedToast && (
         <div className="toast-glass fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-full border border-[var(--accent-border)] px-5 py-3 text-sm text-[var(--accent)] backdrop-blur-xl">
           {generatedToast}
         </div>
       )}
+    </div>
+  );
+}
+
+function RelationEditor({
+  draft,
+  onChange,
+  onCancel,
+  onSave,
+}: {
+  draft: { edge?: GraphEdge; from?: GraphNode; to?: GraphNode; relationType: GraphRelationType; label: string; description: string; isBidirectional: boolean };
+  onChange: (draft: { edge?: GraphEdge; from?: GraphNode; to?: GraphNode; relationType: GraphRelationType; label: string; description: string; isBidirectional: boolean }) => void;
+  onCancel: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-[rgba(245,248,252,0.58)] px-4 backdrop-blur-md">
+      <section className="lux-card w-full max-w-xl rounded-3xl p-5">
+        <h2 className="text-xl font-semibold text-[var(--text-primary)]">{draft.edge ? "编辑关系" : "创建关系"}</h2>
+        <p className="mt-2 text-sm text-[var(--text-faint)]">
+          {draft.from?.label ?? draft.edge?.from} → {draft.to?.label ?? draft.edge?.to}
+        </p>
+        <div className="mt-5 grid gap-3">
+          <label className="grid gap-2">
+            <span className="text-sm text-[var(--text-muted)]">关系类型</span>
+            <select
+              value={draft.relationType}
+              onChange={(event) => {
+                const relationType = event.target.value as GraphRelationType;
+                onChange({ ...draft, relationType, label: relationOptions.find(([type]) => type === relationType)?.[1] ?? draft.label });
+              }}
+              className="input-shell rounded-2xl px-4 py-3 text-sm"
+            >
+              {relationOptions.map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="grid gap-2">
+            <span className="text-sm text-[var(--text-muted)]">关系说明 / 标签</span>
+            <input value={draft.label} onChange={(event) => onChange({ ...draft, label: event.target.value })} className="input-shell rounded-2xl px-4 py-3 text-sm" placeholder="例如：证明、引用、依赖" />
+          </label>
+          <label className="grid gap-2">
+            <span className="text-sm text-[var(--text-muted)]">详细说明</span>
+            <textarea value={draft.description} onChange={(event) => onChange({ ...draft, description: event.target.value })} className="input-shell min-h-28 rounded-2xl px-4 py-3 text-sm" placeholder="说明两个节点为什么有关联" />
+          </label>
+          <button type="button" onClick={() => onChange({ ...draft, isBidirectional: !draft.isBidirectional })} className="flex items-center justify-between rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-soft)] px-4 py-3 text-sm text-[var(--text-muted)]">
+            是否双向关系
+            <span className="rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-1 text-xs text-[var(--accent)]">{draft.isBidirectional ? "是" : "否"}</span>
+          </button>
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" onClick={onCancel} className="btn-secondary px-4 py-2">取消</button>
+          <button type="button" onClick={onSave} className="btn-primary px-4 py-2">保存关系</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function NodeEditor({
+  draft,
+  onChange,
+  onCancel,
+  onSave,
+}: {
+  draft: Partial<GraphNode>;
+  onChange: (draft: Partial<GraphNode>) => void;
+  onCancel: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-[rgba(245,248,252,0.58)] px-4 backdrop-blur-md">
+      <section className="lux-card w-full max-w-2xl rounded-3xl p-5">
+        <h2 className="text-xl font-semibold text-[var(--text-primary)]">{draft.id ? "编辑节点" : "新建节点"}</h2>
+        <div className="mt-5 grid gap-3 md:grid-cols-2">
+          <input value={draft.label ?? ""} onChange={(event) => onChange({ ...draft, label: event.target.value })} className="input-shell rounded-2xl px-4 py-3 text-sm" placeholder="节点名称" />
+          <select value={draft.type ?? "concept"} onChange={(event) => onChange({ ...draft, type: event.target.value as GraphNodeType })} className="input-shell rounded-2xl px-4 py-3 text-sm">
+            {allTypes.map((type) => <option key={type} value={type}>{type}</option>)}
+          </select>
+          <input value={(draft.tags ?? []).join(", ")} onChange={(event) => onChange({ ...draft, tags: event.target.value.split(",").map((item) => item.trim()).filter(Boolean) })} className="input-shell rounded-2xl px-4 py-3 text-sm" placeholder="标签，用逗号分隔" />
+          <input value={draft.sourceNote ?? ""} onChange={(event) => onChange({ ...draft, sourceNote: event.target.value })} className="input-shell rounded-2xl px-4 py-3 text-sm" placeholder="来源说明" />
+          <label className="md:col-span-2 grid gap-2">
+            <span className="text-sm text-[var(--text-muted)]">节点说明 / 摘要</span>
+            <textarea value={draft.description ?? draft.userDescription ?? ""} onChange={(event) => onChange({ ...draft, description: event.target.value, userDescription: event.target.value })} className="input-shell min-h-28 rounded-2xl px-4 py-3 text-sm" placeholder="补充节点摘要、备注或用户修正内容" />
+          </label>
+          <button type="button" onClick={() => onChange({ ...draft, isRoot: !draft.isRoot })} className="flex items-center justify-between rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-soft)] px-4 py-3 text-sm text-[var(--text-muted)]">
+            是否作为根节点
+            <span className="rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-1 text-xs text-[var(--accent)]">{draft.isRoot ? "是" : "否"}</span>
+          </button>
+        </div>
+        {draft.originalDescription && <p className="mt-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-soft)] px-4 py-3 text-xs leading-6 text-[var(--text-faint)]">原始 AI 摘要：{draft.originalDescription}</p>}
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" onClick={onCancel} className="btn-secondary px-4 py-2">取消</button>
+          <button type="button" onClick={onSave} className="btn-primary px-4 py-2">保存节点</button>
+        </div>
+      </section>
     </div>
   );
 }

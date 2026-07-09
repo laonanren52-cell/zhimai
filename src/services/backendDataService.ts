@@ -38,12 +38,14 @@ export interface AdminOverview {
 export interface SystemConfigSummary {
   ai: {
     provider: string;
+    providerId?: string;
     model: string;
     enabled: boolean;
     allowMock: boolean;
     configured: boolean;
     apiKeyConfigured: boolean;
     apiKeyMasked?: string;
+    customProviders?: CustomAiProviderSummary[];
     updatedAt?: string;
   };
   search: {
@@ -65,6 +67,35 @@ export interface SystemConfigSummary {
   updatedAt?: string;
 }
 
+export interface CustomAiProviderSummary {
+  id: string;
+  name: string;
+  baseUrl: string;
+  model: string;
+  interfaceType: "openai-compatible" | "deepseek-compatible" | "custom-http";
+  enabled: boolean;
+  isDefault: boolean;
+  note?: string;
+  apiKeyConfigured: boolean;
+  apiKeyMasked?: string;
+  lastTestedAt?: string;
+  lastTestOk?: boolean;
+  lastTestMessage?: string;
+  updatedAt?: string;
+}
+
+export interface CustomAiProviderPatch {
+  id?: string;
+  name: string;
+  baseUrl: string;
+  model: string;
+  interfaceType: "openai-compatible" | "deepseek-compatible" | "custom-http";
+  enabled: boolean;
+  isDefault: boolean;
+  note?: string;
+  apiKey?: string;
+}
+
 export interface SystemConfigPatch {
   ai?: {
     provider?: string;
@@ -72,6 +103,7 @@ export interface SystemConfigPatch {
     enabled?: boolean;
     allowMock?: boolean;
     apiKey?: string;
+    customProviders?: CustomAiProviderPatch[];
   };
   search?: {
     enabled?: boolean;
@@ -187,6 +219,13 @@ export async function updateAdminConfig(config: SystemConfigPatch) {
   return apiRequest<{ config: SystemConfigSummary }>("/api/admin/config", {
     method: "PATCH",
     body: JSON.stringify({ config }),
+  });
+}
+
+export async function testAdminCustomProvider(provider: CustomAiProviderPatch) {
+  return apiRequest<{ result: { ok: boolean; message: string; testedAt: string }; config: SystemConfigSummary }>("/api/admin/config/test-provider", {
+    method: "POST",
+    body: JSON.stringify({ provider }),
   });
 }
 

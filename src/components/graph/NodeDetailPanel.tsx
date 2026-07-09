@@ -14,6 +14,8 @@ type NodeIntent = "ask" | "summary" | "generate" | "analyze" | "web";
 interface NodeDetailPanelProps {
   canEdit: boolean;
   node: GraphNode | null;
+  selectedEdge?: GraphEdge | null;
+  nodes?: GraphNode[];
   neighbors: GraphNode[];
   edges: GraphEdge[];
   documents: KnowledgeDocument[];
@@ -21,7 +23,10 @@ interface NodeDetailPanelProps {
   recommendations: AIRecommendation[];
   onGenerate: (kind: string) => void;
   onAskNode: (intent: NodeIntent) => void;
+  onEditNode?: () => void;
   onDeleteNode: () => void;
+  onEditEdge?: (edge: GraphEdge) => void;
+  onDeleteEdge?: (edge: GraphEdge) => void;
   onReanalyzeDocument: (documentId: string) => void;
 }
 
@@ -39,6 +44,8 @@ const workspacePanels: Array<{ key: WorkspacePanelKey; label: string }> = [
 export default function NodeDetailPanel({
   canEdit,
   node,
+  selectedEdge,
+  nodes = [],
   neighbors,
   edges,
   documents,
@@ -46,7 +53,10 @@ export default function NodeDetailPanel({
   recommendations,
   onGenerate,
   onAskNode,
+  onEditNode,
   onDeleteNode,
+  onEditEdge,
+  onDeleteEdge,
   onReanalyzeDocument,
 }: NodeDetailPanelProps) {
   const [activePanel, setActivePanel] = useState<WorkspacePanelKey>(node ? "detail" : "recent");
@@ -54,6 +64,67 @@ export default function NodeDetailPanel({
   useEffect(() => {
     if (node) setActivePanel("detail");
   }, [node?.id]);
+
+  if (!node && selectedEdge) {
+    const from = nodes.find((item) => item.id === selectedEdge.from);
+    const to = nodes.find((item) => item.id === selectedEdge.to);
+    return (
+      <motion.aside
+        initial={{ opacity: 0.6, x: 20 }}
+        animate={{ opacity: 1, x: 0 }}
+        transition={{ duration: 0.35, ease: "easeOut" }}
+        className="knowledge-graph-frame graph-side-panel lux-card workbench-panel min-w-0 flex-col rounded-3xl p-4"
+      >
+        <div className="graph-panel-header flex items-center gap-3">
+          <div className="icon-tile h-11 w-11">
+            <Link2 className="h-5 w-5" />
+          </div>
+          <div>
+            <h2 className="text-xl font-semibold text-[var(--text-primary)]">关系详情</h2>
+            <p className="text-sm text-[var(--text-faint)]">{selectedEdge.isManual ? "用户手动关系" : "AI 生成关系"}</p>
+          </div>
+        </div>
+        <div className="graph-panel-scroll thin-scrollbar mt-4 space-y-3">
+          <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-soft)] p-4">
+            <p className="text-xs text-[var(--text-faint)]">起点</p>
+            <p className="mt-1 text-sm font-semibold text-[var(--text-primary)]">{from?.label ?? selectedEdge.from}</p>
+          </div>
+          <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-soft)] p-4">
+            <p className="text-xs text-[var(--text-faint)]">终点</p>
+            <p className="mt-1 text-sm font-semibold text-[var(--text-primary)]">{to?.label ?? selectedEdge.to}</p>
+          </div>
+          <div className="rounded-2xl border border-[var(--accent-border)] bg-[var(--accent-soft)] p-4">
+            <p className="text-xs text-[var(--accent)]">关系类型</p>
+            <p className="mt-1 text-sm font-semibold text-[var(--text-primary)]">{selectedEdge.label ?? selectedEdge.relationType}</p>
+            <p className="mt-2 text-xs leading-6 text-[var(--text-muted)]">{selectedEdge.description || selectedEdge.evidence || "暂无关系说明。"}</p>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="micro-card graph-compact-card">
+              <p className="text-xs text-[var(--text-faint)]">可信度</p>
+              <p className="mt-1 text-lg font-semibold text-[var(--text-primary)]">{Math.round((selectedEdge.confidence ?? 0.8) * 100)}%</p>
+            </div>
+            <div className="micro-card graph-compact-card">
+              <p className="text-xs text-[var(--text-faint)]">更新时间</p>
+              <p className="mt-1 text-xs text-[var(--text-primary)]">{formatShanghaiDateTime(selectedEdge.updatedAt ?? selectedEdge.analyzedAt)}</p>
+            </div>
+          </div>
+        </div>
+        <div className="graph-panel-footer mt-4">
+          {canEdit ? (
+            <div className="grid gap-2">
+              <button type="button" onClick={() => onEditEdge?.(selectedEdge)} className="btn-secondary justify-center py-2.5">编辑关系</button>
+              <button type="button" onClick={() => onDeleteEdge?.(selectedEdge)} className="flex items-center justify-center gap-2 rounded-2xl border border-[var(--danger-border)] bg-[var(--danger-bg)] px-3 py-2.5 text-sm font-semibold text-[var(--danger)]">
+                <Trash2 className="h-4 w-4" />
+                删除关系
+              </button>
+            </div>
+          ) : (
+            <p className="rounded-2xl border border-[var(--warning-border)] bg-[var(--warning-bg)] px-3 py-2.5 text-xs leading-5 text-[var(--warning)]">只读空间不能编辑关系。</p>
+          )}
+        </div>
+      </motion.aside>
+    );
+  }
 
   if (!node) {
     return (
@@ -279,9 +350,15 @@ export default function NodeDetailPanel({
               <div key={edge.id} className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-soft)] p-3">
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-sm text-[var(--text-secondary)]">{edge.label ?? edge.relationType}</span>
-                  <span className="text-xs text-[var(--text-faint)]">{Math.round((edge.confidence ?? 0.8) * 100)}%</span>
+                  <span className="text-xs text-[var(--text-faint)]">{edge.isManual ? "手动" : "AI"} · {Math.round((edge.confidence ?? 0.8) * 100)}%</span>
                 </div>
-                <p className="source-snippet-text thin-scrollbar mt-2 text-xs leading-5 text-[var(--text-faint)]">{edge.evidence}</p>
+                <p className="source-snippet-text thin-scrollbar mt-2 text-xs leading-5 text-[var(--text-faint)]">{edge.description || edge.evidence}</p>
+                {canEdit && (
+                  <div className="mt-2 flex gap-2">
+                    <button type="button" onClick={() => onEditEdge?.(edge)} className="rounded-full border border-[var(--border-subtle)] px-3 py-1 text-xs text-[var(--text-muted)]">编辑</button>
+                    <button type="button" onClick={() => onDeleteEdge?.(edge)} className="rounded-full border border-[var(--danger-border)] bg-[var(--danger-bg)] px-3 py-1 text-xs text-[var(--danger)]">删除</button>
+                  </div>
+                )}
               </div>
             ))}
             {sourceSnippets.slice(0, 6).map(({ document, chunk }) => (
@@ -328,6 +405,16 @@ export default function NodeDetailPanel({
             <Search className="h-4 w-4 text-[var(--accent)]" />
             查看来源片段
           </button>
+          {canEdit && (
+            <button
+              type="button"
+              onClick={onEditNode}
+              className="liquid-action flex items-center gap-2 rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-soft)] px-3 py-2.5 text-left text-sm font-medium text-[var(--text-primary)] transition hover:border-[var(--accent-border)] hover:bg-[var(--surface-hover)]"
+            >
+              <Sparkles className="h-4 w-4 text-[var(--accent)]" />
+              编辑节点
+            </button>
+          )}
           <details className="graph-section">
             <summary>
               <span className="flex items-center gap-2 text-sm text-[var(--text-primary)]">
