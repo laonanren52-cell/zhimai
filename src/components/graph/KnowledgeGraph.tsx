@@ -54,6 +54,7 @@ type VisualOptions = {
   opacity?: number;
   shadowScale?: number;
   sizeDelta?: number;
+  showLabel?: boolean;
 };
 
 type StarParticle = {
@@ -93,7 +94,7 @@ interface KnowledgeGraphProps {
   onDeleteEdge?: (edge: GraphEdge) => void;
   onToggleNodeFixed?: (node: GraphNode, fixed: boolean) => void;
   onUpdateNodePositions?: (positions: Array<{ id: string; x: number; y: number; fixed?: boolean; layoutMode?: GraphLayoutMode }>) => void;
-  layoutCommand?: { type: "save" | "center"; version: number } | null;
+  layoutCommand?: { type: "save" | "center" | "reset" | "restore"; version: number } | null;
 }
 
 function colorWithAlpha(hex: string, alpha: number) {
@@ -114,17 +115,13 @@ function resolveCssColor(value: string) {
   return getComputedStyle(document.documentElement).getPropertyValue(match[1]).trim() || value;
 }
 
-function easeOutCubic(value: number) {
-  return 1 - Math.pow(1 - value, 3);
-}
-
 function sizeForNode(node: GraphNode) {
   const base = node.type === "project" ? 12 : node.type === "document" ? 7 : 4.8;
   return base + Math.min((node.value ?? 8) / 7, 5);
 }
 
 function isImportantNode(node: GraphNode) {
-  return node.type === "project" || node.type === "document" || (node.value ?? 0) >= 18;
+  return node.type === "project" || node.type === "document" || Boolean(node.isRoot);
 }
 
 function toVisNode(
@@ -134,19 +131,20 @@ function toVisNode(
   includePosition = true,
   visual: VisualOptions = {},
   searchHit = false,
+  respectFixed = true,
 ): VisNodeItem {
   const meta = nodeTypeMeta[node.type];
   const nodeColor = resolveCssColor(meta.color);
   const nodeGlow = resolveCssColor(meta.glow);
   const opacity = visual.opacity ?? (dimmed ? 0.26 : 0.92);
   const shadowScale = visual.shadowScale ?? 1;
-  const labelVisible = selected || searchHit || node.isRoot || isImportantNode(node);
+  const labelVisible = visual.showLabel ?? (selected || searchHit || node.isRoot || isImportantNode(node));
   const background = dimmed ? colorWithAlpha("var(--text-faint)", opacity) : colorWithAlpha(nodeColor, opacity);
   const sizeDelta = visual.sizeDelta ?? 0;
 
   return {
     id: node.id,
-    label: node.label,
+    label: labelVisible ? (node.label.length > 24 ? `${node.label.slice(0, 24)}…` : node.label) : "",
     title: node.label,
     ...(includePosition ? { x: node.x, y: node.y } : {}),
     shape: "dot",
@@ -172,7 +170,7 @@ function toVisNode(
       x: 0,
       y: 0,
     },
-    fixed: node.fixed ? { x: true, y: true } : false,
+    fixed: respectFixed && node.fixed ? { x: true, y: true } : false,
   };
 }
 
@@ -252,11 +250,7 @@ export default function KnowledgeGraph({
   const firstDataSyncRef = useRef(true);
   const hoverFrameRef = useRef<number | null>(null);
   const visualFrameRef = useRef<number | null>(null);
-  const transitionFrameRef = useRef<number | null>(null);
   const hoveredNodeRef = useRef<string | null>(null);
-  const stabilizeTimerRef = useRef<number | null>(null);
-  const settleTimerRef = useRef<number | null>(null);
-  const dragHighlightTimerRef = useRef<number | null>(null);
   const fitTimerRef = useRef<number | null>(null);
   const resizeTimerRef = useRef<number | null>(null);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
@@ -264,6 +258,8 @@ export default function KnowledgeGraph({
   const ripplesRef = useRef<SearchRipple[]>([]);
   const draggingNodeRef = useRef<string | null>(null);
   const positionSaveTimerRef = useRef<number | null>(null);
+  const pendingPositionSavesRef = useRef(new Map<string, { id: string; x: number; y: number; fixed?: boolean; layoutMode?: GraphLayoutMode; manualPosition?: boolean }>());
+  const layoutSnapshotRef = useRef(new Map<string, { id: string; x: number; y: number; fixed?: boolean; layoutMode?: GraphLayoutMode; manualPosition?: boolean }>());
 
   function clearTimer(ref: React.MutableRefObject<number | null>) {
     if (ref.current !== null) {
@@ -272,61 +268,11 @@ export default function KnowledgeGraph({
     }
   }
 
-  function cancelTransition() {
-    if (transitionFrameRef.current !== null) {
-      window.cancelAnimationFrame(transitionFrameRef.current);
-      transitionFrameRef.current = null;
-    }
-  }
-
   function freezePhysics() {
     const network = networkRef.current;
     if (!network) return;
     network.stopSimulation();
     network.setOptions({ physics: false });
-  }
-
-  function enableInteractivePhysics() {
-    const network = networkRef.current;
-    if (!network) return;
-    if (graphLayoutModeRef.current === "free" || graphLayoutModeRef.current === "stable") {
-      freezePhysics();
-      return;
-    }
-    clearTimer(stabilizeTimerRef);
-    clearTimer(settleTimerRef);
-    network.setOptions({
-      physics: {
-        enabled: true,
-        solver: "forceAtlas2Based",
-        forceAtlas2Based: {
-          gravitationalConstant: -45,
-          centralGravity: 0.015,
-          springLength: 135,
-          springConstant: 0.045,
-          damping: 0.72,
-          avoidOverlap: 0.25,
-        },
-        maxVelocity: 35,
-        minVelocity: 0.35,
-        timestep: 0.45,
-        adaptiveTimestep: true,
-        stabilization: false,
-      },
-    });
-    network.startSimulation();
-  }
-
-  function settleAfterDrag(delay = 1200) {
-    const network = networkRef.current;
-    if (!network) return;
-    clearTimer(settleTimerRef);
-    network.startSimulation();
-    settleTimerRef.current = window.setTimeout(() => {
-      freezePhysics();
-      releaseLocalPhysicsPins();
-      draggingNodeRef.current = null;
-    }, delay);
   }
 
   function scheduleFit(delay = 120) {
@@ -350,59 +296,75 @@ export default function KnowledgeGraph({
     });
   }
 
-  function stabilizeBriefly(iterations = 70) {
-    const network = networkRef.current;
-    if (!network) return;
-    if (graphLayoutModeRef.current === "free" || graphLayoutModeRef.current === "stable") {
-      freezePhysics();
-      return;
-    }
-    clearTimer(stabilizeTimerRef);
-    network.setOptions({ physics: true });
-    network.stabilize(iterations);
-    stabilizeTimerRef.current = window.setTimeout(() => {
-      freezePhysics();
-    }, 900);
-  }
-
-  function getTwoHopRelatedIds(nodeId: string) {
-    const graphData = graphDataRef.current;
-    const firstHop = getNeighborIds(nodeId, graphData.edges);
-    const related = new Set<string>([nodeId, ...firstHop]);
-    firstHop.forEach((neighborId) => {
-      getNeighborIds(neighborId, graphData.edges).forEach((secondHopId) => related.add(secondHopId));
-    });
-    return related;
-  }
-
-  function applyLocalPhysicsPins(nodeId: string) {
-    const nodes = nodesRef.current;
-    if (!nodes) return;
-    const graphData = graphDataRef.current;
-    const relatedIds = getTwoHopRelatedIds(nodeId);
-    nodes.update(
-      graphData.nodes.map((node) => ({
-        id: node.id,
-        fixed: relatedIds.has(node.id) ? false : { x: true, y: true },
-      })),
-    );
-  }
-
-  function releaseLocalPhysicsPins() {
-    const nodes = nodesRef.current;
-    if (!nodes) return;
-    nodes.update(graphDataRef.current.nodes.map((node) => ({ id: node.id, fixed: node.fixed ? { x: true, y: true } : false })));
-  }
-
   function schedulePositionSave(nodeId: string) {
     const network = networkRef.current;
     if (!network || !onUpdateNodePositionsRef.current) return;
     const position = network.getPositions([nodeId])[nodeId];
     if (!position) return;
+    const node = nodeMapRef.current.get(nodeId);
+    pendingPositionSavesRef.current.set(nodeId, {
+      id: nodeId,
+      x: position.x,
+      y: position.y,
+      fixed: node?.fixed ?? false,
+      layoutMode: graphLayoutModeRef.current,
+      manualPosition: true,
+    });
     clearTimer(positionSaveTimerRef);
     positionSaveTimerRef.current = window.setTimeout(() => {
-      onUpdateNodePositionsRef.current?.([{ id: nodeId, x: position.x, y: position.y, fixed: true, layoutMode: "free" }]);
+      const positions = [...pendingPositionSavesRef.current.values()];
+      pendingPositionSavesRef.current.clear();
+      onUpdateNodePositionsRef.current?.(positions);
     }, 420);
+  }
+
+  function readCurrentPositions(layoutMode = graphLayoutModeRef.current, manualPosition = true) {
+    const network = networkRef.current;
+    if (!network) return [];
+    const positions = network.getPositions(graphDataRef.current.nodes.map((node) => node.id));
+    return graphDataRef.current.nodes.flatMap((node) => {
+      const position = positions[node.id];
+      return position
+        ? [{ id: node.id, x: position.x, y: position.y, fixed: node.fixed ?? false, layoutMode, manualPosition }]
+        : [];
+    });
+  }
+
+  function persistCurrentPositions(layoutMode = graphLayoutModeRef.current, manualPosition = true) {
+    const positions = readCurrentPositions(layoutMode, manualPosition);
+    if (positions.length > 0) onUpdateNodePositionsRef.current?.(positions);
+  }
+
+  function runAutomaticLayout() {
+    const network = networkRef.current;
+    const nodes = nodesRef.current;
+    if (!network || !nodes) return;
+    clearTimer(positionSaveTimerRef);
+    nodes.update(graphDataRef.current.nodes.map((node) => ({ id: node.id, fixed: false })));
+    network.setOptions({
+      physics: {
+        enabled: true,
+        solver: "forceAtlas2Based",
+        forceAtlas2Based: {
+          gravitationalConstant: -45,
+          centralGravity: 0.015,
+          springLength: 135,
+          springConstant: 0.045,
+          damping: 0.72,
+          avoidOverlap: 0.25,
+        },
+        maxVelocity: 35,
+        minVelocity: 0.35,
+        timestep: 0.45,
+        adaptiveTimestep: true,
+        stabilization: false,
+      },
+    });
+    network.once("stabilized", () => {
+      freezePhysics();
+      persistCurrentPositions("auto", false);
+    });
+    network.stabilize(180);
   }
 
   function resizeCanvas(canvas: HTMLCanvasElement, width: number, height: number, dpr: number) {
@@ -573,67 +535,6 @@ export default function KnowledgeGraph({
     visualFrameRef.current = window.requestAnimationFrame(frame);
   }
 
-  function revealGraph(duration = 650) {
-    const nodes = nodesRef.current;
-    const edges = edgesRef.current;
-    if (!nodes || !edges) return;
-    cancelTransition();
-    const start = performance.now();
-    const step = (now: number) => {
-      const progress = Math.min(1, (now - start) / duration);
-      const eased = easeOutCubic(progress);
-      const graphData = graphDataRef.current;
-      nodes.update(
-        graphData.nodes.map((node) =>
-          toVisNode(node, node.id === selectedRef.current, false, false, {
-            opacity: 0.05 + eased * 0.87,
-            shadowScale: 0.25 + eased * 0.75,
-          }),
-        ),
-      );
-      edges.update(graphData.edges.map((edge) => toVisEdge(edge, false, false, 0.08 + eased * 0.92)));
-      if (progress < 1) {
-        transitionFrameRef.current = window.requestAnimationFrame(step);
-      } else {
-        transitionFrameRef.current = null;
-        paintGraph(selectedRef.current);
-      }
-    };
-    transitionFrameRef.current = window.requestAnimationFrame(step);
-  }
-
-  function fadeGraphOut(graphData: GraphData, done: () => void) {
-    const nodes = nodesRef.current;
-    const edges = edgesRef.current;
-    if (!nodes || !edges) {
-      done();
-      return;
-    }
-    cancelTransition();
-    const start = performance.now();
-    const duration = 180;
-    const step = (now: number) => {
-      const progress = Math.min(1, (now - start) / duration);
-      const opacity = Math.max(0.04, 1 - progress);
-      nodes.update(
-        graphData.nodes.map((node) =>
-          toVisNode(node, node.id === selectedRef.current, false, false, {
-            opacity,
-            shadowScale: Math.max(0.25, opacity),
-          }),
-        ),
-      );
-      edges.update(graphData.edges.map((edge) => toVisEdge(edge, false, false, opacity)));
-      if (progress < 1) {
-        transitionFrameRef.current = window.requestAnimationFrame(step);
-      } else {
-        transitionFrameRef.current = null;
-        done();
-      }
-    };
-    transitionFrameRef.current = window.requestAnimationFrame(step);
-  }
-
   function addRipple(nodeId: string) {
     const now = performance.now();
     ripplesRef.current.push(
@@ -653,7 +554,7 @@ export default function KnowledgeGraph({
 
     if (!activeId || !activeNodeVisible) {
       const searchHits = new Set(searchNodes(graphData.nodes, searchQueryRef.current.trim()).map((node) => node.id));
-      nodes.update(graphData.nodes.map((node) => toVisNode(node, false, false, false, {}, searchHits.has(node.id))));
+      nodes.update(graphData.nodes.map((node) => toVisNode(node, false, false, false, {}, searchHits.has(node.id), graphLayoutModeRef.current === "auto")));
       edges.update(graphData.edges.map((edge) => toVisEdge(edge, edge.id === selectedEdgeRef.current)));
       return;
     }
@@ -666,7 +567,8 @@ export default function KnowledgeGraph({
         toVisNode(node, node.id === activeId, !relatedIds.has(node.id), false, {
           sizeDelta: node.id === activeId ? 0.8 : 0,
           shadowScale: node.id === activeId ? 1.35 : 1,
-        }, searchHits.has(node.id)),
+          showLabel: node.id === activeId || relatedIds.has(node.id),
+        }, searchHits.has(node.id), graphLayoutModeRef.current === "auto"),
       ),
     );
     edges.update(
@@ -706,12 +608,22 @@ export default function KnowledgeGraph({
     if (removedEdges.length > 0) edges.remove(removedEdges);
     if (removedNodes.length > 0) nodes.remove(removedNodes);
 
+    const network = networkRef.current;
+    const viewPosition = network?.getViewPosition() ?? { x: 0, y: 0 };
+    const scale = network?.getScale() ?? 1;
+    const positionedNodes = nextData.nodes.map((node, index) => {
+      if (currentNodeIds.has(node.id) || (node.x !== undefined && node.y !== undefined)) return node;
+      const column = index % 4;
+      const row = Math.floor(index / 4);
+      return { ...node, x: viewPosition.x + (column - 1.5) * (72 / scale), y: viewPosition.y + (row - 1) * (72 / scale) };
+    });
+
     nodes.update(
-      nextData.nodes.map((node) =>
+      positionedNodes.map((node) =>
         toVisNode(node, node.id === selectedRef.current, false, !currentNodeIds.has(node.id), {
           opacity,
           shadowScale: hidden ? 0.25 : 1,
-        }),
+        }, false, graphLayoutModeRef.current === "auto"),
       ),
     );
     edges.update(nextData.edges.map((edge) => toVisEdge(edge, false, false, hidden ? 0.08 : 1)));
@@ -761,7 +673,7 @@ export default function KnowledgeGraph({
   useEffect(() => {
     graphLayoutModeRef.current = graphLayoutMode;
     if (graphLayoutMode === "free" || graphLayoutMode === "stable") freezePhysics();
-    else stabilizeBriefly(60);
+    paintGraph(selectedRef.current);
   }, [graphLayoutMode]);
 
   useEffect(() => {
@@ -783,14 +695,22 @@ export default function KnowledgeGraph({
       scheduleFit(20);
       return;
     }
+    if (layoutCommand.type === "reset") {
+      runAutomaticLayout();
+      return;
+    }
+    if (layoutCommand.type === "restore") {
+      const snapshot = [...layoutSnapshotRef.current.values()];
+      if (snapshot.length === 0) return;
+      nodesRef.current?.update(snapshot.map((position) => ({ id: position.id, x: position.x, y: position.y, fixed: position.fixed ?? false })));
+      onUpdateNodePositionsRef.current?.(snapshot);
+      paintGraph(selectedRef.current);
+      return;
+    }
     if (layoutCommand.type === "save" && onUpdateNodePositionsRef.current) {
-      const ids = graphDataRef.current.nodes.map((node) => node.id);
-      const positions = networkRef.current.getPositions(ids);
-      onUpdateNodePositionsRef.current(
-        ids
-          .map((id) => positions[id] ? { id, x: positions[id].x, y: positions[id].y, fixed: true, layoutMode: "free" as GraphLayoutMode } : null)
-          .filter((item): item is { id: string; x: number; y: number; fixed: boolean; layoutMode: GraphLayoutMode } => Boolean(item)),
-      );
+      const positions = readCurrentPositions(graphLayoutModeRef.current, true);
+      layoutSnapshotRef.current = new Map(positions.map((position) => [position.id, position]));
+      onUpdateNodePositionsRef.current(positions);
     }
   }, [layoutCommand?.version]);
 
@@ -798,12 +718,13 @@ export default function KnowledgeGraph({
     if (!containerRef.current || networkRef.current) return;
 
     const initialData = graphDataRef.current;
+    const hasUnpositionedNodes = initialData.nodes.some((node) => node.x === undefined || node.y === undefined);
     const visNodes = new DataSet<VisNodeItem>(
       initialData.nodes.map((node) =>
         toVisNode(node, node.id === selectedRef.current, true, true, {
           opacity: 0.04,
           shadowScale: 0.2,
-        }),
+        }, false, graphLayoutModeRef.current === "auto"),
       ),
     );
     const visEdges = new DataSet<VisEdgeItem>(initialData.edges.map((edge) => toVisEdge(edge, false, false, 0.08)));
@@ -820,7 +741,7 @@ export default function KnowledgeGraph({
           randomSeed: 13,
         },
         physics: {
-          enabled: graphLayoutModeRef.current === "auto",
+          enabled: graphLayoutModeRef.current === "auto" && hasUnpositionedNodes,
           solver: "forceAtlas2Based",
           forceAtlas2Based: {
             gravitationalConstant: -45,
@@ -835,7 +756,7 @@ export default function KnowledgeGraph({
           timestep: 0.45,
           adaptiveTimestep: true,
           stabilization: {
-            enabled: true,
+            enabled: graphLayoutModeRef.current === "auto" && hasUnpositionedNodes,
             iterations: 180,
             updateInterval: 20,
             fit: false,
@@ -885,11 +806,9 @@ export default function KnowledgeGraph({
       const id = params.nodes?.[0] ? String(params.nodes[0]) : null;
       if (!id) return;
       draggingNodeRef.current = id;
-      clearTimer(dragHighlightTimerRef);
-      clearTimer(settleTimerRef);
-      applyLocalPhysicsPins(id);
+      freezePhysics();
+      hoveredNodeRef.current = id;
       paintGraph(id);
-      enableInteractivePhysics();
     });
 
     network.on("dragging", (params) => {
@@ -902,18 +821,10 @@ export default function KnowledgeGraph({
     network.on("dragEnd", (params) => {
       const id = params.nodes?.[0] ? String(params.nodes[0]) : draggingNodeRef.current;
       if (!id) return;
-      draggingNodeRef.current = id;
       schedulePositionSave(id);
-      paintGraph(id);
-      settleAfterDrag(1200);
-      clearTimer(dragHighlightTimerRef);
-      dragHighlightTimerRef.current = window.setTimeout(() => {
-        if (draggingNodeRef.current === id) {
-          draggingNodeRef.current = null;
-          hoveredNodeRef.current = null;
-          paintGraph(selectedRef.current);
-        }
-      }, 1050);
+      draggingNodeRef.current = null;
+      hoveredNodeRef.current = null;
+      paintGraph(selectedRef.current);
     });
 
     network.on("click", (params) => {
@@ -974,22 +885,17 @@ export default function KnowledgeGraph({
       onSwitchLocalRef.current(id);
     });
 
-    network.once("stabilizationIterationsDone", () => {
-      freezePhysics();
-      scheduleFit(80);
-      revealGraph(720);
-    });
-
-    if (graphLayoutModeRef.current !== "auto") {
-      window.setTimeout(() => {
+    if (graphLayoutModeRef.current === "auto" && hasUnpositionedNodes) {
+      network.once("stabilizationIterationsDone", () => {
         freezePhysics();
-        scheduleFit(80);
-        revealGraph(520);
-      }, 120);
+        persistCurrentPositions("auto", false);
+      });
+    } else {
+      freezePhysics();
     }
 
     network.on("stabilized", () => {
-      if (draggingNodeRef.current || settleTimerRef.current !== null) return;
+      if (draggingNodeRef.current) return;
       freezePhysics();
     });
 
@@ -1007,10 +913,6 @@ export default function KnowledgeGraph({
     return () => {
       if (hoverFrameRef.current !== null) window.cancelAnimationFrame(hoverFrameRef.current);
       if (visualFrameRef.current !== null) window.cancelAnimationFrame(visualFrameRef.current);
-      cancelTransition();
-      clearTimer(stabilizeTimerRef);
-      clearTimer(settleTimerRef);
-      clearTimer(dragHighlightTimerRef);
       clearTimer(positionSaveTimerRef);
       clearTimer(fitTimerRef);
       clearTimer(resizeTimerRef);
@@ -1034,15 +936,10 @@ export default function KnowledgeGraph({
       return;
     }
 
-    const previousData = graphDataRef.current;
-    fadeGraphOut(previousData, () => {
-      graphDataRef.current = data;
-      nodeMapRef.current = new Map(data.nodes.map((node) => [node.id, node]));
-      edgeMapRef.current = new Map(data.edges.map((edge) => [edge.id, edge]));
-      syncDataSets(data, true);
-      stabilizeBriefly(70);
-      window.setTimeout(() => revealGraph(520), 520);
-    });
+    graphDataRef.current = data;
+    nodeMapRef.current = new Map(data.nodes.map((node) => [node.id, node]));
+    edgeMapRef.current = new Map(data.edges.map((edge) => [edge.id, edge]));
+    syncDataSets(data);
   }, [data]);
 
   useEffect(() => {
@@ -1062,11 +959,7 @@ export default function KnowledgeGraph({
         return;
       }
       selectedRef.current = target.id;
-      onSelectNodeRef.current(target);
       paintGraph(target.id);
-      addRipple(target.id);
-      networkRef.current?.selectNodes([target.id]);
-      focusSearchResult(target.id);
     }, 160);
 
     return () => window.clearTimeout(searchTimer);

@@ -70,7 +70,7 @@ type KnowledgeAction =
   | { type: "deleteNode"; workspaceId: string; nodeId: string }
   | { type: "upsertEdge"; workspaceId: string; edge: GraphEdge }
   | { type: "deleteEdge"; workspaceId: string; edgeId: string }
-  | { type: "updateNodePositions"; workspaceId: string; positions: Array<{ id: string; x: number; y: number; fixed?: boolean; layoutMode?: GraphLayoutMode }> }
+  | { type: "updateNodePositions"; workspaceId: string; positions: Array<{ id: string; x: number; y: number; fixed?: boolean; layoutMode?: GraphLayoutMode; manualPosition?: boolean; positionUpdatedBy?: string }> }
   | { type: "setNodesFixed"; workspaceId: string; nodeIds?: string[]; fixed: boolean }
   | { type: "resetLayout"; workspaceId: string }
   | { type: "deleteDocument"; workspaceId: string; documentId: string }
@@ -92,7 +92,7 @@ interface KnowledgeContextValue {
   deleteNode: (nodeId: string) => void;
   upsertEdge: (edge: GraphEdge) => void;
   deleteEdge: (edgeId: string) => void;
-  updateNodePositions: (positions: Array<{ id: string; x: number; y: number; fixed?: boolean; layoutMode?: GraphLayoutMode }>) => void;
+  updateNodePositions: (positions: Array<{ id: string; x: number; y: number; fixed?: boolean; layoutMode?: GraphLayoutMode; manualPosition?: boolean; positionUpdatedBy?: string }>) => void;
   setNodesFixed: (nodeIds: string[] | undefined, fixed: boolean) => void;
   resetLayout: () => void;
   deleteDocument: (documentId: string) => void;
@@ -720,6 +720,8 @@ function knowledgeReducer(state: KnowledgeState, action: KnowledgeAction): Knowl
             fixed: position.fixed ?? node.fixed ?? true,
             layoutMode: position.layoutMode ?? node.layoutMode ?? "free",
             positionUpdatedAt: nowIso(),
+            manualPosition: position.manualPosition ?? true,
+            ...(position.positionUpdatedBy ? { positionUpdatedBy: position.positionUpdatedBy } : {}),
           };
         }),
         edges: state.graph.edges,

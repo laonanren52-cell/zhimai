@@ -63,7 +63,8 @@ export default function Graph({ onOpenAssistant }: GraphProps) {
   const [relationDraft, setRelationDraft] = useState<{ edge?: GraphEdge; from?: GraphNode; to?: GraphNode; relationType: GraphRelationType; label: string; description: string; isBidirectional: boolean } | null>(null);
   const [nodeDraft, setNodeDraft] = useState<Partial<GraphNode> | null>(null);
   const [layoutMode, setLayoutMode] = useState<GraphLayoutMode>("stable");
-  const [layoutCommand, setLayoutCommand] = useState<{ type: "save" | "center"; version: number } | null>(null);
+  const [layoutCommand, setLayoutCommand] = useState<{ type: "save" | "center" | "reset" | "restore"; version: number } | null>(null);
+  const [toolDrawerOpen, setToolDrawerOpen] = useState(false);
 
   const baseGraph = state.graph;
   const selectedDocumentIdForFilter = quickFilter === "selectedDocument" ? selectedNode?.sourceDocumentIds?.[0] : undefined;
@@ -288,10 +289,12 @@ export default function Graph({ onOpenAssistant }: GraphProps) {
       setGeneratedToast("当前布局已保存。");
     }
     if (action === "restore") setGeneratedToast("已使用最近一次保存的布局。");
+    if (action === "restore") setLayoutCommand({ type: "restore", version: Date.now() });
     if (action === "reset") {
       if (!window.confirm("确认重置为自动布局吗？这会覆盖用户手动摆放的位置。")) return;
-      resetLayout();
       setLayoutMode("auto");
+      resetLayout();
+      setLayoutCommand({ type: "reset", version: Date.now() });
       setGeneratedToast("已重置为自动布局。");
     }
     if (action === "fixAll") {
@@ -319,6 +322,7 @@ export default function Graph({ onOpenAssistant }: GraphProps) {
       return;
     }
     if (!window.confirm("确认清空当前知识星图、资料记录和成果节点吗？此操作不可撤销。")) return;
+    if (window.prompt("请输入“清空星图”以确认此危险操作。") !== "清空星图") return;
     clearGraph();
     setMode("global");
     setScopeNodeId(null);
@@ -443,7 +447,7 @@ export default function Graph({ onOpenAssistant }: GraphProps) {
   }
 
   return (
-    <div className="mx-auto max-w-[1680px] px-3 py-6 md:px-6 md:py-8 fade-in">
+    <div className="relative mx-auto max-w-[1680px] px-3 py-6 md:px-6 md:py-8 fade-in">
       <div className="mb-6 flex flex-col justify-between gap-4 md:flex-row md:items-end">
         <div>
           <h1 className="page-title-compact">知脉星图</h1>
@@ -451,7 +455,31 @@ export default function Graph({ onOpenAssistant }: GraphProps) {
             把资料、项目、问题、技术点和成果组织为可追溯的个人知识星图。点击节点只更新高亮、来源和右侧详情，不会自动放大画布。
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
+          <div className="liquid-action rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-2 text-sm text-[var(--accent)]">
+            {baseGraph.nodes.length} 节点 · {baseGraph.edges.length} 关系 · {state.documents.length} 资料
+          </div>
+          <select value={layoutMode} onChange={(event) => setLayoutMode(event.target.value as GraphLayoutMode)} className="input-shell rounded-full px-3 py-2 text-sm">
+            <option value="auto">自动布局</option>
+            <option value="stable">稳定布局</option>
+            <option value="free">自由布局</option>
+          </select>
+          <button
+            type="button"
+            onClick={() => {
+              setRelationEditMode((value) => !value);
+              setRelationStartNode(null);
+            }}
+            disabled={!canEditCurrentWorkspace}
+            className={relationEditMode ? "btn-primary px-3 py-2" : "btn-secondary px-3 py-2"}
+          >
+            {relationEditMode ? "关系编辑中" : "关系编辑模式"}
+          </button>
+          <button type="button" onClick={() => setToolDrawerOpen((value) => !value)} className="btn-secondary shrink-0 px-3 py-2">
+            {toolDrawerOpen ? "关闭工具" : "星图工具"}
+          </button>
+        </div>
+        <div className="hidden">
           <div className="liquid-action rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-4 py-2 text-sm text-[var(--accent)]">
             {baseGraph.nodes.length} 节点 · {baseGraph.edges.length} 关系 · {state.documents.length} 资料
           </div>
@@ -503,6 +531,46 @@ export default function Graph({ onOpenAssistant }: GraphProps) {
           )}
         </div>
       </div>
+
+      {toolDrawerOpen && (
+        <div className="absolute right-3 top-20 z-40 w-[min(92vw,420px)] rounded-3xl border border-[var(--border-subtle)] bg-[var(--surface)] p-4 shadow-glass backdrop-blur-xl md:right-6">
+          <div className="grid gap-4">
+            <section>
+              <h2 className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--text-faint)]">节点操作</h2>
+              <div className="grid grid-cols-2 gap-2">
+                <button type="button" onClick={openNewNodeForm} disabled={!canEditCurrentWorkspace} className="btn-secondary px-3 py-2">新建节点</button>
+                <button type="button" onClick={() => setGeneratedToast("已进入节点批量选择模式。") } className="btn-secondary px-3 py-2">批量选择节点</button>
+                <button type="button" onClick={() => handleLayoutAction("fixAll")} disabled={!canEditCurrentWorkspace} className="btn-secondary px-3 py-2">全部固定</button>
+                <button type="button" onClick={() => handleLayoutAction("unfixAll")} disabled={!canEditCurrentWorkspace} className="btn-secondary px-3 py-2">全部取消固定</button>
+              </div>
+            </section>
+            <section>
+              <h2 className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--text-faint)]">布局管理</h2>
+              <div className="grid grid-cols-2 gap-2">
+                <button type="button" onClick={() => handleLayoutAction("save")} disabled={!canEditCurrentWorkspace} className="btn-secondary px-3 py-2">保存当前布局</button>
+                <button type="button" onClick={() => handleLayoutAction("restore")} className="btn-secondary px-3 py-2">恢复上次布局</button>
+                <button type="button" onClick={() => handleLayoutAction("reset")} disabled={!canEditCurrentWorkspace} className="btn-secondary px-3 py-2">重置自动布局</button>
+                <button type="button" onClick={() => handleLayoutAction("center")} className="btn-secondary px-3 py-2">居中视图</button>
+              </div>
+            </section>
+            <section>
+              <h2 className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--text-faint)]">发布与同步</h2>
+              <div className="grid grid-cols-2 gap-2">
+                {canEditCurrentWorkspace && currentWorkspace?.type === "admin_public" ? (
+                  <button type="button" onClick={() => publishWorkspace("管理员发布了新的共享星图更新。" )} className="btn-secondary px-3 py-2">发布更新</button>
+                ) : (
+                  <button type="button" onClick={() => window.location.reload()} className="btn-secondary px-3 py-2">刷新共享星图</button>
+                )}
+                <button type="button" onClick={() => setGeneratedToast("共享星图将在保存后同步给有权限的成员。") } className="btn-secondary px-3 py-2">同步共享星图</button>
+              </div>
+            </section>
+            <section>
+              <h2 className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--danger)]">危险操作</h2>
+              <button type="button" onClick={handleClearGraph} disabled={!canEditCurrentWorkspace} className="w-full rounded-2xl border border-[var(--danger)] px-3 py-2 text-sm text-[var(--danger)] transition hover:bg-[var(--danger-bg)]">清空星图</button>
+            </section>
+          </div>
+        </div>
+      )}
 
       <div className="graph-workspace-grid grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)_300px] 2xl:grid-cols-[320px_minmax(680px,1fr)_360px]">
         <GraphSidebar

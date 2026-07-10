@@ -39,6 +39,8 @@ export interface GraphNode {
   fixed?: boolean;
   layoutMode?: GraphLayoutMode;
   positionUpdatedAt?: string;
+  positionUpdatedBy?: string;
+  manualPosition?: boolean;
   analysisProvider?: string;
   analysisSourceStatus?: "api" | "mock" | "local_rule";
   analyzedAt?: string;
