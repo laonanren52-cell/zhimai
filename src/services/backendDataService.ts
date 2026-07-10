@@ -81,6 +81,9 @@ export interface CustomAiProviderSummary {
   lastTestedAt?: string;
   lastTestOk?: boolean;
   lastTestMessage?: string;
+  availableModels?: string[];
+  modelsFetchedAt?: string;
+  modelsFetchMessage?: string;
   updatedAt?: string;
 }
 
@@ -94,6 +97,7 @@ export interface CustomAiProviderPatch {
   isDefault: boolean;
   note?: string;
   apiKey?: string;
+  availableModels?: string[];
 }
 
 export interface SystemConfigPatch {
@@ -224,6 +228,13 @@ export async function updateAdminConfig(config: SystemConfigPatch) {
 
 export async function testAdminCustomProvider(provider: CustomAiProviderPatch) {
   return apiRequest<{ result: { ok: boolean; message: string; testedAt: string }; config: SystemConfigSummary }>("/api/admin/config/test-provider", {
+    method: "POST",
+    body: JSON.stringify({ provider }),
+  });
+}
+
+export async function fetchAdminCustomProviderModels(provider: CustomAiProviderPatch) {
+  return apiRequest<{ result: { ok: boolean; models: string[]; message: string; fetchedAt: string }; config: SystemConfigSummary }>("/api/admin/config/provider-models", {
     method: "POST",
     body: JSON.stringify({ provider }),
   });

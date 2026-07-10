@@ -197,6 +197,9 @@ function defaultSystemConfig() {
 function normalizeCustomProvider(value = {}) {
   const name = String(value.name || value.provider || "").trim();
   const id = String(value.id || slug(name) || `custom-${Date.now()}`).toLowerCase();
+  const availableModels = Array.isArray(value.availableModels)
+    ? [...new Set(value.availableModels.map((model) => String(model || "").trim()).filter(Boolean))].slice(0, 200)
+    : [];
   return {
     id,
     name: name || id,
@@ -210,6 +213,9 @@ function normalizeCustomProvider(value = {}) {
     lastTestedAt: value.lastTestedAt || "",
     lastTestOk: Boolean(value.lastTestOk),
     lastTestMessage: String(value.lastTestMessage || "").slice(0, 500),
+    availableModels,
+    modelsFetchedAt: value.modelsFetchedAt || "",
+    modelsFetchMessage: String(value.modelsFetchMessage || "").slice(0, 500),
     updatedAt: value.updatedAt || nowIso(),
   };
 }
@@ -327,6 +333,9 @@ function configSummary(config = readSystemConfig()) {
         lastTestedAt: item.lastTestedAt,
         lastTestOk: item.lastTestOk,
         lastTestMessage: item.lastTestMessage,
+        availableModels: item.availableModels || [],
+        modelsFetchedAt: item.modelsFetchedAt,
+        modelsFetchMessage: item.modelsFetchMessage,
         updatedAt: item.updatedAt,
       })),
       updatedAt: config.ai.updatedAt,
@@ -745,13 +754,33 @@ function normalizeChatCompletionsEndpoint(baseUrl = "") {
   return `${trimmed}/v1/chat/completions`;
 }
 
+function normalizeModelsEndpoint(baseUrl = "") {
+  const trimmed = String(baseUrl || "").trim().replace(/\/+$/, "");
+  if (!trimmed) return "";
+  if (/\/models$/i.test(trimmed)) return trimmed;
+  if (/\/chat\/completions$/i.test(trimmed)) return trimmed.replace(/\/chat\/completions$/i, "/models");
+  if (/\/v1$/i.test(trimmed)) return `${trimmed}/models`;
+  return `${trimmed}/v1/models`;
+}
+
 function classifyProviderTestError(error) {
   if (error?.name === "AbortError") return "网络无法访问或连接超时，请检查 API Base URL。";
   const message = error instanceof Error ? error.message : String(error || "连接测试失败。");
   if (/401|403|unauthorized|forbidden|invalid api key/i.test(message)) return `API Key 错误或无权限：${message}`;
-  if (/404|model.*not.*found|model_not_found|does not exist/i.test(message)) return `Model 不存在或 Base URL 路径不正确：${message}`;
+  if (/unsupported model|model.*not.*found|model_not_found|does not exist|model .*not exist|invalid model/i.test(message)) return `Model ID 不存在或当前 Base URL 不支持该模型：${message}`;
+  if (/404|not found/i.test(message)) return `Base URL 路径不正确，或该接口不是 OpenAI-compatible：${message}`;
   if (/ENOTFOUND|ECONNREFUSED|fetch failed|network/i.test(message)) return `网络无法访问或 Base URL 错误：${message}`;
-  if (/message\.content|choices|json|format/i.test(message)) return `返回格式不兼容：${message}`;
+  if (/message\.content|choices|json|format|html|xml/i.test(message)) return `接口返回格式不兼容，可能不是 OpenAI-compatible 接口：${message}`;
+  return message;
+}
+
+function classifyProviderModelsError(error) {
+  if (error?.name === "AbortError") return "模型列表请求超时，请检查 API Base URL。";
+  const message = error instanceof Error ? error.message : String(error || "获取模型列表失败。");
+  if (/401|403|unauthorized|forbidden|invalid api key/i.test(message)) return `API Key 错误或无权限：${message}`;
+  if (/404|not found|method not allowed|405/i.test(message)) return `当前 Provider 不支持模型列表接口。请到服务商控制台复制准确 model id。${message}`;
+  if (/ENOTFOUND|ECONNREFUSED|fetch failed|network/i.test(message)) return `网络无法访问或 Base URL 错误：${message}`;
+  if (/json|format|data/i.test(message)) return `模型列表返回格式不兼容，可能不是 OpenAI-compatible 接口：${message}`;
   return message;
 }
 
@@ -760,6 +789,13 @@ async function testProviderConnection(provider) {
   if (!normalized.baseUrl) throw new Error("API Base URL 不能为空。");
   if (!normalized.model) throw new Error("Model 名称不能为空。");
   if (!normalized.apiKey) throw new Error("API Key 未配置。");
+  if (normalized.availableModels.length > 0 && !normalized.availableModels.includes(normalized.model)) {
+    return {
+      ok: false,
+      message: `Model ID 不在已获取的模型列表中：${normalized.model}。请点击“获取模型列表”后选择真实 model id。`,
+      testedAt: nowIso(),
+    };
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Number(process.env.AI_TEST_TIMEOUT_MS || 20000));
   try {
@@ -793,6 +829,40 @@ async function testProviderConnection(provider) {
     return { ok: true, message: "连接成功，模型可用。", testedAt: nowIso() };
   } catch (error) {
     return { ok: false, message: classifyProviderTestError(error), testedAt: nowIso() };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchProviderModels(provider) {
+  const normalized = normalizeCustomProvider(provider);
+  if (!normalized.baseUrl) throw new Error("API Base URL 不能为空。");
+  if (!normalized.apiKey) throw new Error("API Key 未配置。");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Number(process.env.AI_TEST_TIMEOUT_MS || 20000));
+  try {
+    const response = await fetch(normalizeModelsEndpoint(normalized.baseUrl), {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${normalized.apiKey}`,
+      },
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    if (!response.ok) throw new Error(`模型列表接口返回 ${response.status}: ${text.slice(0, 260)}`);
+    let payload = {};
+    try {
+      payload = text ? JSON.parse(text) : {};
+    } catch {
+      throw new Error(`模型列表返回格式不是 JSON：${text.slice(0, 160)}`);
+    }
+    const rawModels = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : Array.isArray(payload) ? payload : [];
+    const models = [...new Set(rawModels.map((item) => (typeof item === "string" ? item : item?.id || item?.name || "")).map((model) => String(model).trim()).filter(Boolean))].slice(0, 200);
+    if (!models.length) throw new Error("模型列表返回格式不兼容：缺少 data[].id。");
+    return { ok: true, models, message: `已获取 ${models.length} 个可用模型。`, fetchedAt: nowIso() };
+  } catch (error) {
+    return { ok: false, models: [], message: classifyProviderModelsError(error), fetchedAt: nowIso() };
   } finally {
     clearTimeout(timer);
   }
@@ -1485,6 +1555,37 @@ async function route(req, res) {
           lastTestOk: result.ok,
           lastTestMessage: result.message,
           updatedAt: stamp,
+        };
+        if (index >= 0) providers[index] = nextProvider;
+        else providers.push(nextProvider);
+        const nextConfig = applySystemConfigPatch(currentConfig, { ai: { customProviders: providers } });
+        saveSystemConfig(nextConfig);
+      }
+      jsonResponse(res, 200, { result, config: configSummary(readSystemConfig()) });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/admin/config/provider-models") {
+      const db = readDb();
+      const admin = userFromRequest(req, db);
+      if (admin.role !== "admin" || admin.canAccessAdminPanel === false) {
+        jsonResponse(res, 403, { error: "只有管理员可以获取自定义 AI Provider 的模型列表。" });
+        return;
+      }
+      const currentConfig = readSystemConfig();
+      const providerPayload = payload.provider ?? payload;
+      const existing = providerPayload.id ? findCustomProvider(currentConfig, providerPayload.id) : null;
+      const provider = normalizeCustomProvider({ ...(existing ?? {}), ...providerPayload });
+      const result = await fetchProviderModels(provider);
+      if (provider.id && provider.name && provider.baseUrl) {
+        const providers = [...(currentConfig.ai.customProviders ?? [])];
+        const index = providers.findIndex((item) => item.id === provider.id);
+        const nextProvider = {
+          ...(index >= 0 ? providers[index] : provider),
+          ...provider,
+          availableModels: result.ok ? result.models : provider.availableModels,
+          modelsFetchedAt: result.fetchedAt,
+          modelsFetchMessage: result.message,
+          updatedAt: result.fetchedAt,
         };
         if (index >= 0) providers[index] = nextProvider;
         else providers.push(nextProvider);

@@ -24,6 +24,7 @@ import {
   getAdminConfig,
   getAdminOverview,
   getUserPreferences,
+  fetchAdminCustomProviderModels,
   testAdminCustomProvider,
   updateAdminConfig,
   updateUserPreferences,
@@ -113,6 +114,7 @@ export default function AdminSettings() {
   const [savingConfig, setSavingConfig] = useState(false);
   const [customProviderDraft, setCustomProviderDraft] = useState<CustomAiProviderPatch>(emptyCustomProvider);
   const [testingProviderId, setTestingProviderId] = useState<string | null>(null);
+  const [fetchingModelsId, setFetchingModelsId] = useState<string | null>(null);
   const [preferences, setPreferences] = useState<UserPreferences>(defaultPreferences);
 
   const canAccessAdminPanel = currentUser?.role === "admin" && currentUser.canAccessAdminPanel !== false;
@@ -206,6 +208,14 @@ export default function AdminSettings() {
     ["mock", "Mock"],
     ...customProviders.map((provider): [string, string] => [provider.id, provider.name]),
   ];
+  const draftProviderKey = customProviderDraft.id || customProviderDraft.name || customProviderDraft.baseUrl;
+  const customProviderModelOptions = useMemo(() => {
+    const saved = customProviderDraft.id ? customProviders.find((provider) => provider.id === customProviderDraft.id) : null;
+    const models = [...(customProviderDraft.availableModels ?? []), ...(saved?.availableModels ?? []), customProviderDraft.model]
+      .map((model) => String(model || "").trim())
+      .filter(Boolean);
+    return [...new Set(models)].map((model): [string, string] => [model, model]);
+  }, [customProviderDraft.availableModels, customProviderDraft.id, customProviderDraft.model, customProviders]);
 
   const allSections: Array<{ key: SettingsSection; label: string; detail: string; icon: ReactNode; adminOnly?: boolean }> = [
     { key: "profile", label: "个人资料", detail: "用户名、昵称、邮箱", icon: <UserCog className="h-4 w-4" /> },
@@ -312,6 +322,7 @@ export default function AdminSettings() {
         enabled: item.enabled,
         isDefault: nextProvider.isDefault ? false : item.isDefault,
         note: item.note,
+        availableModels: item.availableModels,
       })),
       nextProvider,
     ];
@@ -352,6 +363,7 @@ export default function AdminSettings() {
         enabled: item.enabled,
         isDefault: item.isDefault,
         note: item.note,
+        availableModels: item.availableModels,
       }));
     const fallbackProvider = configDraft.aiProvider === providerId ? "deepseek" : configDraft.aiProvider;
     try {
@@ -376,6 +388,38 @@ export default function AdminSettings() {
       setNotice(error instanceof Error ? error.message : "连接测试失败。");
     } finally {
       setTestingProviderId(null);
+    }
+  }
+
+  async function fetchCustomProviderModels(provider: CustomAiProviderPatch) {
+    if (!canAccessAdminPanel) return;
+    const name = provider.name.trim();
+    const baseUrl = provider.baseUrl.trim();
+    if (!name || !baseUrl) {
+      setNotice("获取模型列表前需要填写 Provider 名称和 API Base URL。");
+      return;
+    }
+    setFetchingModelsId(provider.id || provider.name || provider.baseUrl);
+    setNotice(null);
+    try {
+      const id = provider.id || name.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, "-").replace(/^-+|-+$/g, "");
+      const { result, config } = await fetchAdminCustomProviderModels({ ...provider, id, name, baseUrl });
+      setSystemConfig(config);
+      if (result.ok) {
+        setCustomProviderDraft((draft) => ({
+          ...draft,
+          id,
+          name,
+          baseUrl,
+          availableModels: result.models,
+          model: result.models.includes(draft.model) ? draft.model : result.models[0] || draft.model,
+        }));
+      }
+      setNotice(result.message);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "获取模型列表失败。");
+    } finally {
+      setFetchingModelsId(null);
     }
   }
 
@@ -528,7 +572,11 @@ export default function AdminSettings() {
                     <div className="grid gap-3 md:grid-cols-2">
                       <TextField label="Provider 名称" value={customProviderDraft.name} onChange={(value) => setCustomProviderDraft((draft) => ({ ...draft, name: value }))} placeholder="例如：硅基流动" />
                       <TextField label="API Base URL" value={customProviderDraft.baseUrl} onChange={(value) => setCustomProviderDraft((draft) => ({ ...draft, baseUrl: value }))} placeholder="https://api.example.com/v1" />
-                      <TextField label="Model 名称" value={customProviderDraft.model} onChange={(value) => setCustomProviderDraft((draft) => ({ ...draft, model: value }))} placeholder="Qwen/Qwen2.5-72B-Instruct" />
+                      {customProviderModelOptions.length > 0 ? (
+                        <SelectField label="Model ID" value={customProviderDraft.model} onChange={(value) => setCustomProviderDraft((draft) => ({ ...draft, model: value }))} options={customProviderModelOptions} />
+                      ) : (
+                        <TextField label="Model ID" value={customProviderDraft.model} onChange={(value) => setCustomProviderDraft((draft) => ({ ...draft, model: value }))} placeholder="请填写服务商控制台中的准确 model id" />
+                      )}
                       <SelectField
                         label="接口类型"
                         value={customProviderDraft.interfaceType}
@@ -541,6 +589,10 @@ export default function AdminSettings() {
                       <SwitchRow label="设为默认模型" checked={customProviderDraft.isDefault} onChange={(value) => setCustomProviderDraft((draft) => ({ ...draft, isDefault: value }))} />
                     </div>
                     <div className="flex flex-wrap gap-2">
+                      <button type="button" onClick={() => void fetchCustomProviderModels(customProviderDraft)} className="btn-secondary px-4 py-2" disabled={fetchingModelsId === draftProviderKey}>
+                        <Download className="h-4 w-4" />
+                        {fetchingModelsId === draftProviderKey ? "获取中" : "获取模型列表"}
+                      </button>
                       <button type="button" onClick={() => void saveCustomProvider()} className="btn-primary px-4 py-2">
                         <Save className="h-4 w-4" />
                         保存自定义 Provider
@@ -566,6 +618,9 @@ export default function AdminSettings() {
                                 </div>
                                 <p className="mt-2 truncate text-xs text-[var(--text-faint)]">{provider.baseUrl} · {provider.model}</p>
                                 <p className="mt-1 text-xs text-[var(--text-faint)]">API Key：{provider.apiKeyConfigured ? `已配置 ${provider.apiKeyMasked || ""}` : "未配置"} · {provider.interfaceType}</p>
+                                <p className="mt-1 text-xs text-[var(--text-faint)]">
+                                  模型列表：{provider.availableModels?.length ? `${provider.availableModels.length} 个可选模型` : provider.modelsFetchMessage || "尚未获取"}
+                                </p>
                                 {provider.lastTestMessage && <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--text-faint)]">{provider.lastTestMessage}</p>}
                               </div>
                               <div className="flex shrink-0 flex-wrap gap-2">
@@ -581,10 +636,29 @@ export default function AdminSettings() {
                                     isDefault: provider.isDefault,
                                     note: provider.note,
                                     apiKey: "",
+                                    availableModels: provider.availableModels,
                                   })}
                                   className="btn-secondary px-3 py-2"
                                 >
                                   编辑
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void fetchCustomProviderModels({
+                                    id: provider.id,
+                                    name: provider.name,
+                                    baseUrl: provider.baseUrl,
+                                    model: provider.model,
+                                    interfaceType: provider.interfaceType,
+                                    enabled: provider.enabled,
+                                    isDefault: provider.isDefault,
+                                    note: provider.note,
+                                    availableModels: provider.availableModels,
+                                  })}
+                                  className="btn-secondary px-3 py-2"
+                                  disabled={fetchingModelsId === provider.id}
+                                >
+                                  {fetchingModelsId === provider.id ? "获取中" : "获取模型"}
                                 </button>
                                 <button
                                   type="button"
@@ -597,6 +671,7 @@ export default function AdminSettings() {
                                     enabled: provider.enabled,
                                     isDefault: provider.isDefault,
                                     note: provider.note,
+                                    availableModels: provider.availableModels,
                                   })}
                                   className="btn-secondary px-3 py-2"
                                   disabled={testingProviderId === provider.id}
